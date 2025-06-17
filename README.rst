@@ -1,0 +1,8 @@
+*************************
+MADIS Downloader Package
+*************************
+
+1. Download all MADIS data as netcdf files for a given time period.
+2. Unpack netcdf files into timeseries csvs for each coordinate within the given bounding box.
+3. Process the csvs to filter according to quality control checks and convert variables to correct units.
+4. Write processed csvs to a single nc file.
