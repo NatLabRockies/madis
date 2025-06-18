@@ -12,3 +12,9 @@ Designed to handle the following steps
 Install from the main directory
 -------------------------------
 ``pip install -e .``
+
+Run script
+----------
+``python run_madis_downloader.py --help``
+
+``python run_madis_downloader.py <region> <start_year> <end_year> <out_dir>``
