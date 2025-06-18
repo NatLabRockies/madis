@@ -11,6 +11,7 @@ import pickle
 import subprocess
 from datetime import datetime
 from glob import glob
+from typing import ClassVar
 
 import dask.array as da
 import numpy as np
@@ -20,8 +21,50 @@ from dateutil import rrule
 from rex import init_logger
 from tqdm import tqdm
 
-init_logger(__name__, log_level='DEBUG')
+init_logger(__name__, log_level='INFO')
 logger = logging.getLogger(__name__)
+
+
+VALID_NETWORKS = {
+    'metar': 'point/metar/netcdf',
+    'sao': 'point/sao/netcdf',
+    'maritime': 'point/maritime/netcdf',
+    'crn': 'LDAD/crn/netCDF',
+    'hcn': 'LDAD/hcn/netCDF',
+    'nepp': 'LDAD/nepp/netCDF',
+    'rwis': 'LDAD/rwis/netCDF',
+    'hfmetar': 'LDAD/hfmetar/netCDF',
+    'snow': 'LDAD/snow/netCDF',
+    'wisdom': 'LDAD/WISDOM/netCDF',
+    'radiometer': 'point/radiometer/netcdf',
+    'radiosonde': 'point/raob/netcdf',
+    'coop': 'LDAD/coop/netCDF',
+    'urbanet': 'LDAD/urbanet/netCDF',
+    'hydro': 'LDAD/hydro/netCDF',
+    'ldadprofiler': 'LDAD/profiler/netCDF',
+    'mesonet': 'LDAD/mesonet/netCDF',
+    'satwind3h': 'point/HDW/netcdf',
+    'satwind1h': 'point/HDW1h/netcdf',
+    'poes': 'point/POES/netcdf',
+    'satrad': 'point/satrad/netcdf',
+    'acars': 'point/acars/netcdf',
+    'acarsprofiles': 'point/acarsProfiles/netcdf',
+    'pointprofiler': 'point/profiler/netcdf',
+}
+
+
+DOMAINS = {
+    'americas': {'area': [53, -132, -60, -25]},
+    'pnw': {'area': [44, -125, 42, -123]},
+    'conus': {'area': [53, -132, 20, -60]},
+    'columbia': {'area': [15, -82, -7, -64]},
+    'south_america': {'area': [16, -84, -60, -25]},
+    'central_america': {'area': [36, -120, 0, -58]},
+    'lac': {'area': [36, -120, -65, -15]},
+    'ukraine': {'area': [52.5, 22, 43, 40.5]},
+    'seasia': {'area': [30, 85, -14, 141.5]},
+    'africa': {'area': [40, -22, -38, 64]},
+}
 
 
 class MadisDownloader:
@@ -42,7 +85,7 @@ class MadisDownloader:
     FREQ = '30min'
 
     # mapping of variable names from MADIS to the desired output names
-    NAME_MAP = {
+    NAME_MAP: ClassVar = {
         'windSpeed': 'windspeed_10m',
         'dewpoint': 'd2m',
         'altimeter': 'pressure_0m',
@@ -52,30 +95,29 @@ class MadisDownloader:
         'relHumidity': 'relativehumidity_2m',
     }
 
-    # valid ranges for each variable
-    RANGES = {
-        'u_10m': [-50, 50],
-        'v_10m': [-50, 50],
+    # valid ranges for each variable - this needs to include all variables
+    # that are expected in the final processed data.
+    RANGES: ClassVar = {
+        'u_10m': [-100, 100],
+        'v_10m': [-100, 100],
         'relativehumidity_2m': [0, 100],
-        'temperature_2m': [-50, 50],
-        'd2m': [-50, 50],
-        'pressure_0m': [80000, 110000],
+        'temperature_2m': [-100, 100],
+        'd2m': [-100, 100],
+        'pressure_0m': [40000, 110000],
     }
 
-    def __init__(self, network, out_dir):
+    def __init__(self, network, out_dir, start_date=None, end_date=None):
         self.network = network
         self.out_dir = f'{out_dir}/raw/{network}'
         self.unpack_dir = f'{out_dir}/unpacked/{network}'
         self.process_dir = f'{out_dir}/processed/{network}'
+        self.start_date = start_date
+        self.end_date = end_date
+        self.dates = self.get_dates(start_date, end_date)
         os.makedirs(self.out_dir, exist_ok=True)
         os.makedirs(self.unpack_dir, exist_ok=True)
         os.makedirs(self.process_dir, exist_ok=True)
-        assert network in [
-            'metar',
-            'mesonet',
-            'crn',
-            'maritime',
-        ], f'Network {network} not supported.'
+        assert network in VALID_NETWORKS, f'Network {network} not supported.'
 
     def unpacked_files(self, year):
         """Get a list of unpacked files for the network."""
@@ -89,6 +131,195 @@ class MadisDownloader:
         """Get a list of processed files for the network."""
         return sorted(glob(f'{self.process_dir}/{year}/*.csv', recursive=True))
 
+    def download(self, max_workers=32):
+        """Download raw files for the given network and date range."""
+        logger.info(
+            f'Starting download for {self.network} from {self.start_date} to '
+            f'{self.end_date}'
+        )
+        with multiprocessing.Pool(max_workers) as pool:
+            out_dirs = [self.out_dir] * len(self.dates)
+            networks = [self.network] * len(self.dates)
+            pool.starmap(
+                self.download_date,
+                zip(networks, self.dates, out_dirs),
+            )
+
+    def unpack(self, bbox, max_workers=32, cache_pattern=None):
+        """Unpack the downloaded data into timeseries csv files."""
+
+        for year in sorted({date.year for date in self.dates}):
+            files = self.downloaded_files(year)
+            if not files:
+                logger.warning(
+                    f'No downloaded files found for {self.network} network '
+                    f'for year {year}.'
+                )
+                continue
+            os.makedirs(f'{self.unpack_dir}/{year}', exist_ok=True)
+            logger.info(
+                f'Unpacking {len(files)} files for {self.network} network for '
+                f'year {year}...'
+            )
+            cache_file = (
+                None if not cache_pattern else cache_pattern.format(year=year)
+            )
+            dfs = self.group_coordinate_data(
+                files, bbox, cache_file=cache_file, max_workers=max_workers
+            )
+
+            out_files = [
+                f'{self.unpack_dir}/{year}/{year}_{key}.csv' for key in dfs
+            ]
+            years = [year] * len(out_files)
+            with multiprocessing.Pool(max_workers) as pool:
+                pool.starmap(
+                    self.write_unpacked_csv,
+                    zip(dfs.values(), out_files, years),
+                )
+
+    def process(self, bbox, max_workers=32):
+        """Unpack the downloaded data into timeseries csv files."""
+
+        for year in {date.year for date in self.dates}:
+            files = self.unpacked_files(year)
+            if not files:
+                logger.warning(
+                    f'No unpacked files found for {self.network} network for '
+                    f'year {year}.'
+                )
+                continue
+            os.makedirs(f'{self.process_dir}/{year}', exist_ok=True)
+            files = self.filter_files_for_region(files, bbox)
+            logger.info('Processing unpacked files for year %s', year)
+            out_files = [
+                f'{self.process_dir}/{year}/{os.path.basename(file)}'
+                for file in files
+            ]
+            with multiprocessing.Pool(max_workers) as pool:
+                pool.starmap(self.write_processed_csv, zip(files, out_files))
+
+    @classmethod
+    def download_date(cls, network, date, out_dir):
+        """Download the data for the given date."""
+        url = cls.get_url(network, date.year, date.month, date.day, date.hour)
+        out_file = cls.get_fp(date, out_dir)
+        os.makedirs(os.path.dirname(out_file), exist_ok=True)
+        if os.path.exists(out_file):
+            logger.info(f'File {out_file} exists. Skipping download.')
+            return
+
+        try:
+            check = subprocess.run(
+                [
+                    'wget',
+                    url,
+                    '--spider',
+                    '--quiet',
+                    '--no-check-certificate',
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if check.returncode == 0:
+                logger.info(f'Downloading {url} to {out_file}')
+                _ = subprocess.run(
+                    [
+                        'wget',
+                        url,
+                        '-O',
+                        out_file + '.tmp',
+                        '--no-check-certificate',
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                os.replace(out_file + '.tmp', out_file)
+                logger.info(f'Successfully downloaded {out_file}')
+        except subprocess.CalledProcessError as e:
+            logger.error(f'Error downloading {url}: {e.stderr}')
+            os.remove(out_file + '.tmp')
+
+    @classmethod
+    def read_raw_files(cls, files, cache_file=None, max_workers=32):
+        """Read raw files and return a concatenated dataframe."""
+        if cache_file and os.path.exists(cache_file):
+            logger.info(f'Loading cached data from {cache_file}')
+            with open(cache_file, 'rb') as f:
+                df = pickle.load(f)
+            return df
+        with multiprocessing.Pool(max_workers) as pool:
+            df_list = pool.map(cls._read_single_file, files)
+        df_list = [df for df in df_list if df is not None]
+        if not df_list:
+            logger.error('No valid dataframes found in the files.')
+            return pd.DataFrame()
+        logger.info(f'Concatenating {len(df_list)} dataframes')
+        df = pd.concat(df_list, axis=0)
+        if cache_file:
+            logger.info(f'Saving data to cache file {cache_file}')
+            with open(cache_file + '.tmp', 'wb') as f:
+                pickle.dump(df, f)
+            os.replace(cache_file + '.tmp', cache_file)
+        return df
+
+    @classmethod
+    def write_unpacked_csv(cls, data, outfile, year):
+        """Write the unpacked data to a csv file."""
+        if os.path.exists(outfile):
+            logger.info(f'File {outfile} already exists. Skipping write.')
+        else:
+            time_index = pd.date_range(
+                f'01-01-{year} 00:00:00',
+                f'01-01-{year + 1} 00:00:00',
+                freq=cls.FREQ,
+            )[:-1]
+            tmp = data.set_index('time')
+            tmp = tmp.groupby(tmp.index).first()
+            tmp = cls.reindex(tmp, time_index)
+            if len(tmp) != len(time_index):
+                msg = (
+                    f'Error: {len(tmp)} time steps found, expected '
+                    f'{len(time_index)} for {year}.'
+                )
+                logger.error(msg)
+                raise ValueError(msg)
+            tmp = tmp.drop('lat_lon_str', axis=1, errors='ignore')
+            tmp.to_csv(outfile + '.tmp')
+            os.replace(outfile + '.tmp', outfile)
+            logger.info(f'Saved {outfile}')
+
+    @classmethod
+    def write_processed_csv(cls, infile, outfile):
+        """Write the processed data to a csv file."""
+        if os.path.exists(outfile):
+            logger.info(f'File {outfile} already exists. Skipping write.')
+            return
+        logger.info(f'Reading file {infile}')
+        df = pd.read_csv(infile, index_col=0)
+
+        logger.info(f'Doing QC on {infile}.')
+        df = cls.do_quality_control(df)
+
+        qc_cols = [c for c in df.columns if 'DD' in c]
+        df = df.drop(qc_cols, axis=1)
+        df = df.rename(cls.NAME_MAP, axis=1)
+
+        # Ensure all required output variables are present
+        for var_name in set(cls.NAME_MAP.values()):
+            if var_name not in df:
+                df[var_name] = np.nan
+
+        df = cls.convert_vars(df)
+        df = cls.enforce_ranges(df)
+
+        df = df.drop('lat_lon_str', axis=1, errors='ignore')
+        df.to_csv(outfile + '.tmp')
+        os.replace(outfile + '.tmp', outfile)
+        logger.info(f'Saved {outfile}')
+
     @classmethod
     def get_dates(cls, start_date, end_date):
         """Get a list of dates between start_date and end_date."""
@@ -101,16 +332,9 @@ class MadisDownloader:
     def get_url(cls, network, year, month, day, hour):
         """Get the URL for the given network and date."""
         baseurl = 'https://madis-data.ncep.noaa.gov/madisPublic1/data/archive'
-        baseurl += f'/{year}/{month:02d}/{day:02d}'
-        if network == 'metar':
-            url = baseurl + '/point/metar/netcdf/'
-        elif network == 'mesonet':
-            url = baseurl + '/LDAD/mesonet/netCDF/'
-        elif network == 'crn':
-            url = baseurl + '/LDAD/crn/netCDF/'
-        elif network == 'maritime':
-            url = baseurl + '/point/maritime/netcdf/'
-        return f'{url}{year}{month:02d}{day:02d}_{hour:02d}00.gz'
+        baseurl += f'/{year}/{month:02d}/{day:02d}/'
+        url = baseurl + VALID_NETWORKS.get(network)
+        return f'{url}/{year}{month:02d}{day:02d}_{hour:02d}00.gz'
 
     @classmethod
     def get_fp(cls, date, out_dir):
@@ -119,105 +343,6 @@ class MadisDownloader:
             f'{out_dir}/{date.year}/{date.month}/'
             f'{date.year}{date.month:02d}{date.day:02d}_{date.hour:02d}00.gz'
         )
-
-    @classmethod
-    def download_date(cls, network, date, out_dir):
-        """Download the data for the given date."""
-        url = cls.get_url(network, date.year, date.month, date.day, date.hour)
-        out_file = cls.get_fp(date, out_dir)
-        if os.path.exists(out_file):
-            logger.info(f'File {out_file} exists. Skipping download.')
-            return
-
-        os.makedirs(os.path.dirname(out_file), exist_ok=True)
-
-        try:
-            logger.info(f'Downloading {url} to {out_file}')
-            _ = subprocess.run(
-                ['wget', url, '-O', out_file, '--no-check-certificate'],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            logger.info(f'Successfully downloaded {out_file}')
-        except subprocess.CalledProcessError as e:
-            logger.error(f'Error downloading {url}: {e.stderr}')
-            if os.path.exists(out_file):
-                logger.info(f'Removing {out_file} due to download failure')
-                os.remove(out_file)
-
-    @classmethod
-    def download(cls, network, start_date, end_date, out_dir, max_workers=32):
-        """Run the downloader for the given network and date range."""
-        downloader = cls(network, out_dir)
-        dates = cls.get_dates(start_date, end_date)
-        logger.info(
-            f'Starting download for {network} from {start_date} to {end_date}'
-        )
-        with multiprocessing.Pool(max_workers) as pool:
-            out_dirs = [downloader.out_dir] * len(dates)
-            networks = [network] * len(dates)
-            pool.starmap(
-                downloader.download_date, zip(networks, dates, out_dirs)
-            )
-
-    @classmethod
-    def write_unpacked_csv(cls, data, outfile, year):
-        """Write the unpacked data to a csv file."""
-        if os.path.exists(outfile):
-            logger.info(f'File {outfile} already exists. Skipping write.')
-        else:
-            tmp = data.set_index('time')
-            tmp = tmp.groupby(tmp.index).first()
-            tmp = cls.reindex(tmp, year)
-            tmp.to_csv(outfile)
-            logger.info(f'Saved {outfile}')
-
-    @classmethod
-    def unpack(
-        cls,
-        network,
-        start_date,
-        end_date,
-        out_dir,
-        bbox,
-        max_workers=32,
-        cache_pattern=None,
-    ):
-        """Unpack the downloaded data into timeseries csv files."""
-        downloader = cls(network, out_dir)
-        dates = cls.get_dates(start_date, end_date)
-
-        for year in sorted({date.year for date in dates}):
-            files = downloader.downloaded_files(year)
-            if not files:
-                logger.warning(
-                    f'No files found for {network} network for year {year}.'
-                )
-                continue
-            os.makedirs(f'{downloader.unpack_dir}/{year}', exist_ok=True)
-            logger.info(
-                f'Unpacking {len(files)} files for {network} network for '
-                f'year {year}...'
-            )
-            cache_file = (
-                None if not cache_pattern else cache_pattern.format(year=year)
-            )
-            dfs = downloader.group_coordinate_data(
-                files, bbox, cache_file=cache_file, max_workers=max_workers
-            )
-
-            logger.info('Writing files to disk...')
-
-            out_files = [
-                f'{downloader.unpack_dir}/{year}/{year}_{key}.csv'
-                for key in dfs
-            ]
-            years = [year] * len(out_files)
-            with multiprocessing.Pool(max_workers) as pool:
-                pool.starmap(
-                    cls.write_unpacked_csv, zip(dfs.values(), out_files, years)
-                )
 
     @classmethod
     def get_coord_mask(cls, lats, lons, bbox):
@@ -248,6 +373,33 @@ class MadisDownloader:
         return np.array(files)[coord_mask]
 
     @classmethod
+    def do_time_check(cls, ds, file):
+        """Check if the dataset has a valid time dimension."""
+        file_year = os.path.basename(file)[:4]
+        time_key = (
+            'timeObs'
+            if 'timeObs' in ds
+            else 'observationTime'
+            if 'observationTime' in ds
+            else None
+        )
+        if time_key is None:
+            raise ValueError('No valid time dimension found in dataset.')
+        ti = pd.DatetimeIndex(ds[time_key].values)
+        msg = (
+            f'Year mismatch between file {file} and dataset: '
+            f'file year {file_year}, dataset years {ti.year.unique()}'
+        )
+        mask = ti.year == int(file_year)
+        if not mask.any():
+            logger.warning(msg)
+            raise ValueError(msg)
+        if not mask.all():
+            ds = ds.load()
+            ds = ds.isel(recNum=mask)
+        return ds
+
+    @classmethod
     def _read_single_file(cls, file):
         """Read a single file and return a dataframe."""
         logger.info(f'Reading file: {file}')
@@ -270,33 +422,11 @@ class MadisDownloader:
                     )
                     ds = ds.drop(varname)
         try:
+            ds = cls.do_time_check(ds, file)
             return ds.to_dataframe()
         except Exception as e:
             logger.error(f'Error converting dataset to dataframe: {e}')
             return None
-
-    @classmethod
-    def read_raw_files(cls, files, cache_file=None, max_workers=32):
-        """Read raw files and return a concatenated dataframe."""
-        if cache_file and os.path.exists(cache_file):
-            logger.info(f'Loading cached data from {cache_file}')
-            with open(cache_file, 'rb') as f:
-                df = pickle.load(f)
-            return df
-        with multiprocessing.Pool(max_workers) as pool:
-            df_list = pool.map(cls._read_single_file, files)
-        df_list = [df for df in df_list if df is not None]
-        if not df_list:
-            logger.error('No valid dataframes found in the files.')
-            return pd.DataFrame()
-        logger.info(f'Concatenating {len(df_list)} dataframes')
-        df = pd.concat(df_list, axis=0)
-        if cache_file:
-            logger.info(f'Saving data to cache file {cache_file}')
-            with open(cache_file + '.tmp', 'wb') as f:
-                pickle.dump(df, f)
-            os.replace(cache_file + '.tmp', cache_file)
-        return df
 
     @classmethod
     def group_coordinate_data(
@@ -335,74 +465,15 @@ class MadisDownloader:
         return dfs
 
     @classmethod
-    def reindex(cls, df, year):
+    def reindex(cls, df, time_index):
         """Reindex dataframes to have a complete time index for the year."""
-        time_index = pd.date_range(
-            f'01-01-{year} 00:00:00', f'12-31-{year} 23:30:00', freq=cls.FREQ
-        )
         new_ti = df.index.append(time_index).sort_values()
         new_ti = new_ti.drop_duplicates()
         tmp = df.reindex(new_ti)
         tmp = tmp.interpolate(method='time')
         tmp = tmp.ffill()
         tmp = tmp.resample(cls.FREQ).first()
-        if tmp.index[0].year == year - 1:
-            tmp = tmp.iloc[1:]
-        if len(tmp) != len(time_index):
-            logger.error('Dataframe was not reindexed correctly')
         return tmp
-
-    @classmethod
-    def write_processed_csv(cls, infile, outfile):
-        """Write the processed data to a csv file."""
-        if os.path.exists(outfile):
-            logger.info(f'File {outfile} already exists. Skipping write.')
-            return
-        df = pd.read_csv(infile, index_col=0)
-        logger.info(f'Doing QC on {infile}.')
-        df = cls.do_quality_control(df)
-        qc_cols = [c for c in df.columns if 'DD' in c]
-        df = df.drop(qc_cols, axis=1)
-        tmp = df[[v for v in cls.VARIABLES if v in df.columns]]
-        df = df.rename(cls.NAME_MAP, axis=1)
-        if not np.isnan(tmp.values).all():
-            df = cls.convert_vars(df)
-            df.to_csv(outfile)
-            logger.info(f'Saved {outfile}')
-        else:
-            logger.info(f'No valid data in {infile}. Skipping {outfile}.')
-
-    @classmethod
-    def process(
-        cls,
-        network,
-        start_date,
-        end_date,
-        out_dir,
-        bbox,
-        max_workers=32,
-    ):
-        """Unpack the downloaded data into timeseries csv files."""
-        downloader = cls(network, out_dir)
-        dates = cls.get_dates(start_date, end_date)
-
-        for year in {date.year for date in dates}:
-            files = downloader.unpacked_files(year)
-            if not files:
-                logger.warning(
-                    f'No unpacked files found for {network} network for year '
-                    f'{year}.'
-                )
-                continue
-            os.makedirs(f'{downloader.process_dir}/{year}', exist_ok=True)
-            files = cls.filter_files_for_region(files, bbox)
-            logger.info('Processing unpacked files for year %s', year)
-            out_files = [
-                f'{downloader.process_dir}/{year}/{os.path.basename(file)}'
-                for file in files
-            ]
-            with multiprocessing.Pool(max_workers) as pool:
-                pool.starmap(cls.write_processed_csv, zip(files, out_files))
 
     @staticmethod
     def constant_check(x, N=4):
@@ -426,49 +497,39 @@ class MadisDownloader:
         non-repeating"""
         var_names = [var_name for var_name in cls.VARIABLES if var_name in df]
         for var_name in var_names:
-            # pass level 1, 2, 3 checks == V
-            verified_check = df[f'{var_name}DD'].values.astype(str) == 'V'
+            # pass level 1, 2, 3 checks == V, subjective good checks == G,
+            # positive values only, non-repeating values
+            ver_check = df[f'{var_name}DD'].values.astype(str) == 'V'
             good_check = df[f'{var_name}DD'].values.astype(str) == 'G'
-            check = verified_check | good_check
+            positive_check = df[var_name] > 0
+            varying_check = ~cls.constant_check(df[var_name].values)
+            check = (ver_check | good_check) & positive_check & varying_check
             df.loc[~check, var_name] = np.nan
-            logger.info(
+            logger.debug(
                 f'Filtered {(~check).sum()} / {len(check)} time steps '
                 f'from {var_name} based on QC checks.'
-            )
-
-        for var in cls.VARIABLES:
-            if var not in df:
-                logger.info(f'{var} not found in dataframe.')
-                df[var] = np.nan
-            zero_mask = df[var] > 0
-            constant_mask = ~cls.constant_check(df[var].values)
-            mask = zero_mask & constant_mask
-            df.loc[~mask, var] = np.nan
-            logger.info(
-                f'Filtered {(~zero_mask).sum()} / {len(mask)} zero value time '
-                f'steps for {var}'
-            )
-            logger.info(
-                f'Filtered {(~constant_mask).sum()} / {len(mask)} repeated '
-                f'value time steps for {var}'
             )
 
         return df
 
     @classmethod
-    def enforce_ranges(cls, arr, feature):
+    def enforce_ranges(cls, data):
         """Make sure all variables are within acceptable ranges"""
-        valid_range = cls.RANGES.get(feature, [-np.inf, np.inf])
-        out_of_range_mask = arr > valid_range[1]
-        out_of_range_mask |= arr < valid_range[0]
-        not_nan = ~np.isnan(arr)
-        out_of_range_mask &= not_nan
-        arr[out_of_range_mask] = np.nan
-        logger.info(
-            f'Filtered {(out_of_range_mask).sum().compute()} / '
-            f'{not_nan.sum().compute()} out of range time steps for {feature}'
-        )
-        return arr
+        features = [feat for feat in data.columns if feat in cls.RANGES]
+        for feature in features:
+            valid_range = cls.RANGES.get(feature)
+            out_of_range_mask = data[feature].values > valid_range[1]
+            out_of_range_mask |= data[feature].values < valid_range[0]
+            not_nan = ~np.isnan(data[feature].values)
+            out_of_range_mask &= not_nan
+            arr = data[feature].values
+            arr[out_of_range_mask] = np.nan
+            data[feature] = arr
+            logger.debug(
+                f'Filtered {(out_of_range_mask).sum()} / {not_nan.sum()} '
+                f'out of range time steps for {feature}'
+            )
+        return data
 
     @classmethod
     def get_relativehumidity(cls, data):
@@ -509,22 +570,47 @@ def write_nc(year, files, out_dir, bbox, overwrite=False):
 
     meta = pd.DataFrame()
     filt_files = MadisDownloader.filter_files_for_region(files, bbox)
+    features = pd.read_csv(files[0], index_col=0).columns
+    features = [col for col in features if 'time' not in col]
+    data_vars = {feat: [] for feat in features}
+    valid_files = []
+    logger.info(
+        'Processing %s files for year %s with features: %s',
+        len(filt_files), year, features,
+    )
+    for file in tqdm(filt_files):
+        df = pd.read_csv(file, index_col=0)
+        num_nans = np.isnan(df[features].values).sum()
+        nan_frac = num_nans / df[features].size
+        if nan_frac < 1.0:
+            valid_files.append(file)
+            for feat in features:
+                data_vars[feat].append(df[feat].values[:, None])
+    for feat in features:
+        try:
+            data_vars[feat] = da.concatenate(data_vars[feat], axis=-1)
+        except Exception as e:
+            msg = f'Error concatenating {feat}: {e}'
+            logger.error(msg)
+            raise OSError(msg) from e
+        data_vars[feat] = (('time', 'space'), data_vars[feat])
+
     basefiles = [
         os.path.basename(file).replace('.csv', '').split('_')
-        for file in filt_files
+        for file in valid_files
     ]
     lats = [bf[1] for bf in basefiles]
     lons = [bf[2] for bf in basefiles]
 
     logger.info(
-        'Keeping %s / %s coordinates based on region.',
-        len(filt_files),
+        'Keeping %s / %s coordinates based on region and NaN filtering.',
+        len(valid_files),
         len(files),
     )
 
     meta['latitude'] = lats
     meta['longitude'] = lons
-    time_index = pd.read_csv(files[0], index_col=0)['time']
+    time_index = pd.read_csv(files[0], index_col=0).index
     logger.info(
         'Creating dataset with %s timesteps and %s coordinates',
         len(time_index),
@@ -552,25 +638,7 @@ def write_nc(year, files, out_dir, bbox, overwrite=False):
             ),
         ),
     }
-    data_vars = {}
-    features = pd.read_csv(files[0], index_col=0).columns
-    features = [col for col in features if 'time' not in col]
-    for feat in features:
-        logger.info('Prepping array for feature = %s', feat)
-        arr = []
-        for file in tqdm(files):
-            df = pd.read_csv(file, index_col=0)
-            arr.append(df[feat].values)
-        arr = [a[:, None] for a in arr]
-        try:
-            arr = da.concatenate(arr, axis=-1)
-        except Exception as e:
-            msg = f'Error concatenating {feat}: {e}'
-            logger.error(msg)
-            raise OSError(msg) from e
-        arr = MadisDownloader.enforce_ranges(arr, feat)
-        data_vars[feat] = (('time', 'space'), arr)
-
     ds = xr.Dataset(data_vars=data_vars, coords=coords)
     ds.to_netcdf(out_file + '.tmp')
     os.replace(out_file + '.tmp', out_file)
+    logger.info(f'Saved {out_file}')
