@@ -269,7 +269,11 @@ class MadisDownloader:
                         f'Could not convert {varname} to string, skipping.'
                     )
                     ds = ds.drop(varname)
-        return ds.to_dataframe()
+        try:
+            return ds.to_dataframe()
+        except Exception as e:
+            logger.error(f'Error converting dataset to dataframe: {e}')
+            return None
 
     @classmethod
     def read_raw_files(cls, files, cache_file=None, max_workers=32):
@@ -302,6 +306,9 @@ class MadisDownloader:
         df = cls.read_raw_files(
             files, cache_file=cache_file, max_workers=max_workers
         )
+        if df.empty:
+            logger.warning('No data found in the files.')
+            return {}
         df['lat_lon_str'] = df[['latitude', 'longitude']].apply(
             lambda x: f'{x.latitude:.8f}_{x.longitude:.8f}', axis=1
         )
