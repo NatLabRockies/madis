@@ -262,9 +262,11 @@ class MadisDownloader:
             os.remove(out_file + '.tmp')
 
     @classmethod
-    def read_raw_files(cls, files, cache_file=None, max_workers=32):
+    def read_raw_files(
+        cls, files, cache_file=None, max_workers=32, overwrite=False
+    ):
         """Read raw files and return a concatenated dataframe."""
-        if cache_file and os.path.exists(cache_file):
+        if cache_file and os.path.exists(cache_file) and not overwrite:
             logger.info(f'Loading cached data from {cache_file}')
             return xr.open_dataset(cache_file).to_dataframe()
         with multiprocessing.Pool(max_workers) as pool:
@@ -275,7 +277,7 @@ class MadisDownloader:
             return pd.DataFrame()
         logger.info(f'Concatenating {len(df_list)} dataframes')
         df = pd.concat(df_list, axis=0)
-        if cache_file:
+        if cache_file and (not os.path.exists(cache_file) or overwrite):
             logger.info(f'Saving data to cache file {cache_file}')
             xr.Dataset.from_dataframe(df).to_netcdf(cache_file + '.tmp')
             os.replace(cache_file + '.tmp', cache_file)

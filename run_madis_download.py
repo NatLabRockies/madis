@@ -81,6 +81,16 @@ parser.add_argument(
     `out_dir/unpacked/<network>`.""",
 )
 parser.add_argument(
+    '--use_cache',
+    action='store_true',
+    default=False,
+    help="""Flag to save download data to a combined netcdf cache file and to
+    load raw data prior to unpacking if cache exists. If this is set, the
+    script will use existing combined files for unpacking instead of individual
+    raw files. These files will only include data for the subset of variables
+    defined in the `MadisDownloader`""",
+)
+parser.add_argument(
     '--process',
     action='store_true',
     default=False,
@@ -136,7 +146,11 @@ if __name__ == '__main__':
                 )
 
             if args.unpack:
-                cfp = downloader.out_dir + f'/combined_{network}_{{year}}.nc'
+                cfp = (
+                    downloader.out_dir + f'/combined_{network}_{{year}}.nc'
+                    if args.use_cache
+                    else None
+                )
                 downloader.unpack(
                     max_workers=args.max_workers,
                     overwrite=args.overwrite,
@@ -164,5 +178,5 @@ if __name__ == '__main__':
                     bbox=DOMAINS[args.region]['area'],
                     overwrite=args.overwrite,
                     max_workers=args.max_workers,
-                    networks=args.networks
+                    networks=args.networks,
                 )
