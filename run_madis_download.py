@@ -56,6 +56,14 @@ parser.add_argument(
     specify it here, e.g. `-networks crn`.""",
 )
 parser.add_argument(
+    '-max_workers',
+    type=int,
+    default=64,
+    help="""Maximum number of workers to use for downloading, unpacking, and
+    processing data. Default is 64. This should be set according to the number
+    of available CPU cores.""",
+)
+parser.add_argument(
     '--download',
     action='store_true',
     default=False,
@@ -81,8 +89,8 @@ parser.add_argument(
     convert variables to correct units, and derive some variables
     (e.g. u / v from wind speed and wind direction). The processed files will
     be stored in `out_dir/processed/<network>`. NOTE: This will include files
-    with all NaNs if all data was filtered. These are still written to help
-    keep track of which files have already been processed.""",
+    with all NaNs if all data was filtered for that location. These are still
+    written to help keep track of which files have already been processed.""",
 )
 parser.add_argument(
     '--write_nc',
@@ -91,6 +99,13 @@ parser.add_argument(
     help="""Flag to write the processed csv files to a single netCDF file for
     each year. The netCDF files will be stored in `out_dir/<region>/final/`.
     """,
+)
+parser.add_argument(
+    '--overwrite',
+    action='store_true',
+    default=False,
+    help="""Flag to overwrite existing files. If this is not set, the script
+    will skip files that already exist in the output directories.""",
 )
 args = parser.parse_args()
 
@@ -105,6 +120,7 @@ if __name__ == '__main__':
     with warnings.catch_warnings():
         warnings.simplefilter('ignore', FutureWarning)
         warnings.simplefilter('ignore', SerializationWarning)
+
         start_date = f'{args.start_year}-01-01'
         end_date = f'{args.end_year}-12-31'
         for network in args.networks:
@@ -115,17 +131,23 @@ if __name__ == '__main__':
                 end_date=end_date,
             )
             if args.download:
-                downloader.download(max_workers=64)
+                downloader.download(
+                    max_workers=args.max_workers, overwrite=args.overwrite
+                )
 
             if args.unpack:
+                cfp = downloader.out_dir + f'/combined_{network}_{{year}}.nc'
                 downloader.unpack(
-                    max_workers=2,
+                    max_workers=args.max_workers,
+                    overwrite=args.overwrite,
                     bbox=DOMAINS[args.region]['area'],
+                    cache_pattern=cfp,
                 )
 
             if args.process:
                 downloader.process(
-                    max_workers=8,
+                    max_workers=args.max_workers,
+                    overwrite=args.overwrite,
                     bbox=DOMAINS[args.region]['area'],
                 )
 
@@ -140,4 +162,7 @@ if __name__ == '__main__':
                     files,
                     out_dir=f'{args.out_dir}/{args.region}/final/',
                     bbox=DOMAINS[args.region]['area'],
+                    overwrite=args.overwrite,
+                    max_workers=args.max_workers,
+                    networks=args.networks
                 )
