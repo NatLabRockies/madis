@@ -131,50 +131,51 @@ if __name__ == '__main__':
         warnings.simplefilter('ignore', FutureWarning)
         warnings.simplefilter('ignore', SerializationWarning)
 
-        start_date = f'{args.start_year}-01-01'
-        end_date = f'{args.end_year}-12-31'
-        for network in args.networks:
-            downloader = MadisDownloader(
-                network=network,
-                out_dir=args.out_dir,
-                start_date=start_date,
-                end_date=end_date,
-            )
-            if args.download:
-                downloader.download(
-                    max_workers=args.max_workers, overwrite=args.overwrite
+        for year in range(args.start_year, args.end_year + 1):
+            start_date = f'{year}-01-01'
+            end_date = f'{year}-12-31'
+            proc_files = []
+            for network in args.networks:
+                downloader = MadisDownloader(
+                    network=network,
+                    out_dir=args.out_dir,
+                    start_date=start_date,
+                    end_date=end_date,
                 )
+                if args.download:
+                    downloader.download(
+                        max_workers=args.max_workers, overwrite=args.overwrite
+                    )
 
-            if args.unpack:
-                cfp = (
-                    downloader.out_dir + f'/combined_{network}_{{year}}.nc'
-                    if args.use_cache
-                    else None
-                )
-                downloader.unpack(
-                    max_workers=args.max_workers,
-                    overwrite=args.overwrite,
-                    bbox=DOMAINS[args.region]['area'],
-                    cache_pattern=cfp,
-                )
+                if args.unpack:
+                    cfp = (
+                        downloader.out_dir + f'/combined_{network}_{{year}}.nc'
+                        if args.use_cache
+                        else None
+                    )
+                    downloader.unpack(
+                        max_workers=args.max_workers,
+                        overwrite=args.overwrite,
+                        bbox=DOMAINS[args.region]['area'],
+                        cache_pattern=cfp,
+                    )
 
-            if args.process:
-                downloader.process(
-                    max_workers=args.max_workers,
-                    overwrite=args.overwrite,
-                    bbox=DOMAINS[args.region]['area'],
-                )
+                if args.process:
+                    downloader.process(
+                        max_workers=args.max_workers,
+                        overwrite=args.overwrite,
+                        bbox=DOMAINS[args.region]['area'],
+                    )
 
-        if args.write_nc:
-            for year in range(args.start_year, args.end_year + 1):
-                files = []
-                for network in args.networks:
-                    proc_dir = f'{args.out_dir}/processed/{network}/{year}/'
-                    files += sorted(glob(f'{proc_dir}/{year}_*.csv'))
+                proc_dir = f'{args.out_dir}/processed/{network}/{year}/'
+                proc_files += sorted(glob(f'{proc_dir}/{year}_*.csv'))
+
+            if args.write_nc:
+                out_dir = f'{args.out_dir}/{args.region}/final/'
                 write_nc(
                     year,
-                    files,
-                    out_dir=f'{args.out_dir}/{args.region}/final/',
+                    proc_files,
+                    out_dir=out_dir,
                     bbox=DOMAINS[args.region]['area'],
                     overwrite=args.overwrite,
                     max_workers=args.max_workers,

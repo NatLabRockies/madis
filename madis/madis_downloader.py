@@ -156,6 +156,14 @@ class MadisDownloader:
         """Unpack the downloaded data into timeseries csv files."""
 
         for year in sorted({date.year for date in self.dates}):
+            if self.unpacked_files_exist(year, bbox) and not overwrite:
+                logger.info(
+                    f'Unpacked data for {self.network} network for year '
+                    f'{year} and bbox {bbox} already exists. Skipping '
+                    'unpacking.'
+                )
+                continue
+
             files = self.downloaded_files(year)
             if not files:
                 logger.warning(
@@ -189,6 +197,7 @@ class MadisDownloader:
                     self.write_unpacked_csv,
                     zip(dfs.values(), out_files, years, overwrites),
                 )
+            self.write_unpacked_meta(year, bbox, dfs, overwrite=overwrite)
 
     def process(self, bbox, max_workers=32, overwrite=False):
         """Unpack the downloaded data into timeseries csv files."""
@@ -217,6 +226,38 @@ class MadisDownloader:
                 pool.starmap(
                     self.write_processed_csv, zip(files, out_files, overwrites)
                 )
+
+    def get_unpacked_meta_file(self, year, bbox):
+        """Get the list of coordinates for the unpacked data within the
+        bounding box. Used to check if data has been unpacked already."""
+        bbox_str = '_'.join([f'{b:.2f}' for b in bbox])
+        return f'{self.unpack_dir}/meta_{year}_{bbox_str}.csv'
+
+    def unpacked_files_exist(self, year, bbox):
+        """Check if the unpacked meta exists for the given year and bbox."""
+        meta_file = self.get_unpacked_meta_file(year, bbox)
+        if not os.path.exists(meta_file):
+            logger.debug(f'Meta file {meta_file} does not exist.')
+            return False
+        meta_file = pd.read_csv(meta_file)
+        out_files = [
+            f'{self.unpack_dir}/{year}/{year}_{key}.csv'
+            for key in meta_file['lat_lon_str']
+        ]
+        return all(os.path.exists(file) for file in out_files)
+
+    def write_unpacked_meta(self, year, bbox, dfs, overwrite=False):
+        """Write the unpacked meta file for the given year and bbox."""
+        meta_file = self.get_unpacked_meta_file(year, bbox)
+        if os.path.exists(meta_file) and not overwrite:
+            logger.debug(
+                f'Meta file {meta_file} already exists. Skipping write.'
+            )
+            return
+        meta_df = pd.DataFrame({'lat_lon_str': list(dfs.keys())})
+        meta_df.to_csv(meta_file + '.tmp', index=False)
+        os.replace(meta_file + '.tmp', meta_file)
+        logger.debug(f'Saved unpacked meta file {meta_file}')
 
     @classmethod
     def download_date(cls, network, date, out_dir, overwrite=False):
@@ -289,7 +330,7 @@ class MadisDownloader:
         """Write the unpacked data to a csv file."""
         var_names = list(cls.VARIABLES) + [f'{v}DD' for v in cls.VARIABLES]
         if os.path.exists(outfile) and not overwrite:
-            logger.info(f'File {outfile} already exists. Skipping write.')
+            logger.debug(f'File {outfile} already exists. Skipping write.')
         else:
             ti = pd.date_range(
                 f'01-01-{year} 00:00:00',
@@ -320,8 +361,7 @@ class MadisDownloader:
         if os.path.exists(outfile) and not overwrite:
             logger.debug(f'File {outfile} already exists. Skipping write.')
             return
-        logger.debug(f'Reading file {infile}')
-        df = pd.read_csv(infile, index_col=0)
+        df = cls._read_csv(infile)
 
         logger.debug(f'Doing QC on {infile}.')
         df = cls.do_quality_control(df)
@@ -335,8 +375,14 @@ class MadisDownloader:
             if var_name not in df:
                 df[var_name] = np.nan
         df = df[list(cls.NAME_MAP.values())]
-        df = cls.convert_vars(df)
-        df = cls.enforce_ranges(df)
+
+        try:
+            df = cls.convert_vars(df)
+            df = cls.enforce_ranges(df)
+        except Exception as e:
+            logger.error(f'Error processing {infile}: {e}')
+            raise
+
         df.to_csv(outfile + '.tmp')
         os.replace(outfile + '.tmp', outfile)
         logger.debug(f'Saved {outfile}')
@@ -417,6 +463,13 @@ class MadisDownloader:
             ds = ds.load()
             ds = ds.isel(recNum=mask)
         return ds
+
+    @classmethod
+    def _read_csv(cls, file):
+        """Read a csv file and return a dataframe. Picklable method with
+        logging."""
+        logger.debug(f'Reading file: {file}')
+        return pd.read_csv(file, index_col=0)
 
     @classmethod
     def _read_single_file(cls, file):
@@ -576,13 +629,6 @@ class MadisDownloader:
         return data
 
 
-def read_csv(file):
-    """Read a csv file and return a dataframe. Picklable method with logging
-    used for reading processed files prior to writing to netcdf."""
-    logger.debug(f'Reading file: {file}')
-    return pd.read_csv(file, index_col=0)
-
-
 def _write_nc(
     year,
     data_vars,
@@ -691,7 +737,7 @@ def write_nc(
     )
 
     with multiprocessing.Pool(max_workers) as pool:
-        dfs = pool.map(read_csv, filt_files)
+        dfs = pool.map(MadisDownloader._read_csv, filt_files)
 
     logger.info('Filtering files based on NaN fraction...')
     for df, file in tqdm(zip(dfs, filt_files), total=len(dfs)):
