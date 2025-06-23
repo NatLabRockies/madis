@@ -10,7 +10,6 @@ import os
 import subprocess
 from datetime import datetime
 from glob import glob
-from typing import ClassVar
 
 import dask.array as da
 import numpy as np
@@ -69,56 +68,56 @@ DOMAINS = {
 BASEURL = 'https://madis-data.ncep.noaa.gov/madisPublic1/data/archive'
 
 
+# variables to extract from the netcdf files - these will be stored in the
+# unpacked csv files. The variables in the processed csv files will be
+# determined by the value of the corresponding key and the OUT_VARIABLES keys.
+RAW_VARIABLES = {
+    'windSpeed': 'windspeed_10m',
+    'dewpoint': 'd2m',
+    'altimeter': 'pressure_0m',
+    'stationPressure': 'pressure_0m',
+    'windDir': 'winddirection_10m',
+    'temperature': 'temperature_2m',
+    'relHumidity': 'relativehumidity_2m',
+}
+
+# Time step for the final time series data - this the frequency used in time
+# series interpolation and resampling.
+FREQ = '30min'
+
+# valid ranges for each variable - this needs to include all variables
+# that are expected in the final processed data.
+OUT_VARIABLES = {
+    'u_10m': [-100, 100],
+    'v_10m': [-100, 100],
+    'relativehumidity_2m': [0, 100],
+    'temperature_2m': [-100, 100],
+    'pressure_0m': [40000, 120000],
+}
+
+
 class MadisDownloader:
     """Class to download and process MADIS data."""
 
-    # variables to extract from the netcdf files - these will be stored in the
-    # unpacked csv files
-    VARIABLES = (
-        'altimeter',
-        'stationPressure',
-        'dewpoint',
-        'relHumidity',
-        'windSpeed',
-        'windDir',
-        'temperature',
-    )
-
-    # Time step for the time series data
-    FREQ = '30min'
-
-    # mapping of variable names from MADIS to the desired output names - these
-    # will be used in the processed csv files and the final netcdf file.
-    NAME_MAP: ClassVar = {
-        'windSpeed': 'windspeed_10m',
-        'dewpoint': 'd2m',
-        'altimeter': 'pressure_0m',
-        'stationPressure': 'pressure_0m',
-        'windDir': 'winddirection_10m',
-        'temperature': 'temperature_2m',
-        'relHumidity': 'relativehumidity_2m',
-    }
-
-    # valid ranges for each variable - this needs to include all variables
-    # that are expected in the final processed data.
-    RANGES: ClassVar = {
-        'u_10m': [-100, 100],
-        'v_10m': [-100, 100],
-        'relativehumidity_2m': [0, 100],
-        'temperature_2m': [-100, 100],
-        'd2m': [-100, 100],
-        'pressure_0m': [40000, 120000],
-    }
-
-    def __init__(self, network, out_dir, start_date=None, end_date=None):
+    def __init__(
+        self,
+        network,
+        download_dir,
+        unpack_dir=None,
+        process_dir=None,
+        start_date=None,
+        end_date=None,
+    ):
+        unpack_dir = unpack_dir or download_dir
+        process_dir = process_dir or download_dir
         self.network = network
-        self.out_dir = f'{out_dir}/raw/{network}'
-        self.unpack_dir = f'{out_dir}/unpacked/{network}'
-        self.process_dir = f'{out_dir}/processed/{network}'
+        self.download_dir = f'{download_dir}/raw/{network}'
+        self.unpack_dir = f'{unpack_dir}/unpacked/{network}'
+        self.process_dir = f'{process_dir}/processed/{network}'
         self.start_date = start_date
         self.end_date = end_date
         self.dates = self.get_dates(start_date, end_date)
-        os.makedirs(self.out_dir, exist_ok=True)
+        os.makedirs(self.download_dir, exist_ok=True)
         os.makedirs(self.unpack_dir, exist_ok=True)
         os.makedirs(self.process_dir, exist_ok=True)
         assert network in VALID_NETWORKS, f'Network {network} not supported.'
@@ -129,7 +128,9 @@ class MadisDownloader:
 
     def downloaded_files(self, year):
         """Get a list of downloaded files for the network."""
-        return sorted(glob(f'{self.out_dir}/{year}/**/*.gz', recursive=True))
+        return sorted(
+            glob(f'{self.download_dir}/{year}/**/*.gz', recursive=True)
+        )
 
     def processed_files(self, year):
         """Get a list of processed files for the network."""
@@ -142,12 +143,12 @@ class MadisDownloader:
             f'{self.end_date}'
         )
         with multiprocessing.Pool(max_workers) as pool:
-            out_dirs = [self.out_dir] * len(self.dates)
+            download_dirs = [self.download_dir] * len(self.dates)
             networks = [self.network] * len(self.dates)
             overwrites = [overwrite] * len(self.dates)
             pool.starmap(
                 self.download_date,
-                zip(networks, self.dates, out_dirs, overwrites),
+                zip(networks, self.dates, download_dirs, overwrites),
             )
 
     def unpack(
@@ -212,15 +213,24 @@ class MadisDownloader:
                 continue
             os.makedirs(f'{self.process_dir}/{year}', exist_ok=True)
             files = self.filter_files_for_region(files, bbox)
-            logger.info('Processing unpacked files for year %s', year)
             out_files = [
                 f'{self.process_dir}/{year}/{os.path.basename(file)}'
                 for file in files
             ]
             overwrites = [overwrite] * len(out_files)
+            if (
+                all(os.path.exists(file) for file in out_files)
+                and not overwrite
+            ):
+                logger.info(
+                    f'Processed files for {self.network} network for year '
+                    f'{year} and bbox {bbox} already exist. Skipping '
+                    'processing.'
+                )
+                continue
             logger.info(
-                f'Writing processed data for {self.network} network for year '
-                f'{year} to {len(out_files)} files.'
+                f'Processing {len(files)} unpacked files for {self.network} '
+                f'network for year {year}...'
             )
             with multiprocessing.Pool(max_workers) as pool:
                 pool.starmap(
@@ -260,10 +270,10 @@ class MadisDownloader:
         logger.debug(f'Saved unpacked meta file {meta_file}')
 
     @classmethod
-    def download_date(cls, network, date, out_dir, overwrite=False):
+    def download_date(cls, network, date, download_dir, overwrite=False):
         """Download the data for the given date."""
         url = cls.get_url(network, date.year, date.month, date.day, date.hour)
-        out_file = cls.get_fp(date, out_dir)
+        out_file = cls.get_fp(date, download_dir)
         os.makedirs(os.path.dirname(out_file), exist_ok=True)
         if os.path.exists(out_file) and not overwrite:
             logger.debug(f'File {out_file} exists. Skipping download.')
@@ -328,14 +338,14 @@ class MadisDownloader:
     @classmethod
     def write_unpacked_csv(cls, data, outfile, year, overwrite=False):
         """Write the unpacked data to a csv file."""
-        var_names = list(cls.VARIABLES) + [f'{v}DD' for v in cls.VARIABLES]
+        var_names = list(RAW_VARIABLES) + [f'{v}DD' for v in RAW_VARIABLES]
         if os.path.exists(outfile) and not overwrite:
             logger.debug(f'File {outfile} already exists. Skipping write.')
         else:
             ti = pd.date_range(
                 f'01-01-{year} 00:00:00',
                 f'01-01-{year + 1} 00:00:00',
-                freq=cls.FREQ,
+                freq=FREQ,
             )[:-1]
             tmp = data.set_index('time')
             tmp = tmp.groupby(tmp.index).first()
@@ -343,7 +353,7 @@ class MadisDownloader:
             tmp = tmp.reindex(new_ti)
             tmp = tmp[list(set(var_names) & set(tmp.columns))]
             tmp = tmp.interpolate(method='time').ffill()
-            tmp = tmp.resample(cls.FREQ).first()
+            tmp = tmp.resample(FREQ).first()
             if len(tmp) != len(ti):
                 msg = (
                     f'Error: {len(tmp)} time steps found, expected '
@@ -368,13 +378,13 @@ class MadisDownloader:
 
         qc_cols = [c for c in df.columns if 'DD' in c]
         df = df.drop(qc_cols, axis=1)
-        df = df.rename(cls.NAME_MAP, axis=1)
+        df = df.rename(RAW_VARIABLES, axis=1)
 
         # Ensure all required output variables are present
-        for var_name in set(cls.NAME_MAP.values()):
+        for var_name in set(RAW_VARIABLES.values()):
             if var_name not in df:
                 df[var_name] = np.nan
-        df = df[list(cls.NAME_MAP.values())]
+        df = df[list(RAW_VARIABLES.values())]
 
         try:
             df = cls.convert_vars(df)
@@ -403,10 +413,10 @@ class MadisDownloader:
         return f'{url}/{year}{month:02d}{day:02d}_{hour:02d}00.gz'
 
     @classmethod
-    def get_fp(cls, date, out_dir):
+    def get_fp(cls, date, download_dir):
         """Get the file path for the given network and date."""
         return (
-            f'{out_dir}/{date.year}/{date.month}/'
+            f'{download_dir}/{date.year}/{date.month}/'
             f'{date.year}{date.month:02d}{date.day:02d}_{date.hour:02d}00.gz'
         )
 
@@ -478,14 +488,15 @@ class MadisDownloader:
         try:
             ds = xr.open_dataset(file)
         except Exception as e:
-            logger.info(f'Error reading file: {file}, {e}')
+            logger.info(f'Error reading file: {file}, {e}. Removing...')
+            os.remove(file)
             return None
         return cls._trim_dataset(ds, os.path.basename(file)[:4])
 
     @classmethod
     def _trim_dataset(cls, ds, year):
         """Select only the relevant variables and convert to dataframe."""
-        var_names = list(cls.VARIABLES) + [f'{v}DD' for v in cls.VARIABLES]
+        var_names = list(RAW_VARIABLES) + [f'{v}DD' for v in RAW_VARIABLES]
         var_names += ['timeObs', 'observationTime', 'latitude', 'longitude']
         ds = ds[[v for v in ds if v in var_names]]
         for varname in ds:
@@ -557,7 +568,9 @@ class MadisDownloader:
     def do_quality_control(cls, df):
         """Make sure all variables pass all QC checks, are greater than 0, and
         non-repeating"""
-        var_names = [var_name for var_name in cls.VARIABLES if var_name in df]
+        var_names = [
+            var_name for var_name in RAW_VARIABLES if var_name in df
+        ]
         for var_name in var_names:
             # pass level 1, 2, 3 checks == V, pass level 1, 2 checks == S,
             # subjective good checks == G, positive values only, non-repeating
@@ -583,9 +596,9 @@ class MadisDownloader:
     @classmethod
     def enforce_ranges(cls, data):
         """Make sure all variables are within acceptable ranges"""
-        features = [feat for feat in data.columns if feat in cls.RANGES]
+        features = [feat for feat in data.columns if feat in OUT_VARIABLES]
         for feature in features:
-            valid_range = cls.RANGES.get(feature)
+            valid_range = OUT_VARIABLES.get(feature)
             out_of_range_mask = data[feature].values > valid_range[1]
             out_of_range_mask |= data[feature].values < valid_range[0]
             not_nan = ~np.isnan(data[feature].values)
@@ -710,7 +723,7 @@ def write_nc(
     """Write all csv data to an nc file"""
     os.makedirs(out_dir, exist_ok=True)
     features = pd.read_csv(files[0], index_col=0).columns
-    features = [col for col in features if 'time' not in col]
+    features = [f for f in features if f in OUT_VARIABLES]
     out_files = {
         feat: out_dir + f'madis_{feat}_{year}.nc' for feat in features
     }

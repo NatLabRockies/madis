@@ -17,7 +17,7 @@ from madis.madis_downloader import DOMAINS, MadisDownloader, write_nc
 init_logger(__name__, log_level='DEBUG')
 logger = logging.getLogger(__name__)
 
-NETWORKS = ['crn', 'metar', 'mesonet', 'maritime']
+NETWORKS = ['maritime', 'crn', 'metar', 'mesonet']
 
 desc = """Download madis data for the given region and dates and unpack into
 timeseries csvs for each valid location."""
@@ -138,7 +138,7 @@ if __name__ == '__main__':
             for network in args.networks:
                 downloader = MadisDownloader(
                     network=network,
-                    out_dir=args.out_dir,
+                    download_dir=args.out_dir,
                     start_date=start_date,
                     end_date=end_date,
                 )
