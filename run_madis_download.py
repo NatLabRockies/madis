@@ -64,6 +64,13 @@ parser.add_argument(
     of available CPU cores.""",
 )
 parser.add_argument(
+    '-nan_cap',
+    default=1.0,
+    type=float,
+    help="""Maximum NaN fraction to allow in final netcdf file for each site.
+    """,
+)
+parser.add_argument(
     '--download',
     action='store_true',
     default=False,
@@ -134,7 +141,6 @@ if __name__ == '__main__':
         for year in range(args.start_year, args.end_year + 1):
             start_date = f'{year}-01-01'
             end_date = f'{year}-12-31'
-            proc_files = []
             for network in args.networks:
                 downloader = MadisDownloader(
                     network=network,
@@ -168,16 +174,19 @@ if __name__ == '__main__':
                     )
 
                 proc_dir = f'{args.out_dir}/processed/{network}/{year}/'
-                proc_files += sorted(glob(f'{proc_dir}/{year}_*.csv'))
-
-            if args.write_nc:
-                out_dir = f'{args.out_dir}/{args.region}/final/'
-                write_nc(
-                    year,
-                    proc_files,
-                    out_dir=out_dir,
-                    bbox=DOMAINS[args.region]['area'],
-                    overwrite=args.overwrite,
-                    max_workers=args.max_workers,
-                    networks=args.networks,
-                )
+                proc_files = sorted(glob(f'{proc_dir}/{year}_*.csv'))
+                if args.write_nc and len(proc_files) > 0:
+                    out_dir = f'{args.out_dir}/{args.region}/final/'
+                    logger.info(
+                        f'Writing netCDF files for {network} {year}...'
+                    )
+                    write_nc(
+                        year,
+                        proc_files,
+                        out_dir=out_dir,
+                        bbox=DOMAINS[args.region]['area'],
+                        overwrite=args.overwrite,
+                        max_workers=args.max_workers,
+                        network=network,
+                        nan_cap=args.nan_cap,
+                    )

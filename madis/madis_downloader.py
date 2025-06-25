@@ -680,7 +680,7 @@ def _write_nc(
     all_files,
     out_file,
     bbox,
-    networks,
+    network,
     overwrite=False,
 ):
     """Write a single feature to a netcdf file."""
@@ -688,6 +688,7 @@ def _write_nc(
         logger.info(
             f'File {out_file} for year {year} already exists. Skipping write.'
         )
+        return
     splits = [
         os.path.basename(file).replace('.csv', '').split('_')
         for file in valid_files[feature]
@@ -735,7 +736,7 @@ def _write_nc(
         coords=coords,
         attrs={
             'description': f'MADIS {feature} data for {year}',
-            'networks': ', '.join(networks),
+            'network': network,
             'bbox': bbox,
             'source': BASEURL,
         },
@@ -748,14 +749,22 @@ def _write_nc(
 
 
 def write_nc(
-    year, files, out_dir, bbox, networks, overwrite=False, max_workers=32
+    year,
+    files,
+    out_dir,
+    bbox,
+    network,
+    overwrite=False,
+    max_workers=32,
+    nan_cap=1.0,
 ):
     """Write all csv data to an nc file"""
     os.makedirs(out_dir, exist_ok=True)
     features = pd.read_csv(files[0], index_col=0).columns
     features = [f for f in features if f in OUT_VARIABLES]
     out_files = {
-        feat: out_dir + f'madis_{feat}_{year}.nc' for feat in features
+        feat: out_dir + f'madis_{network}_{feat}_{year}.nc'
+        for feat in features
     }
     if (
         all(os.path.exists(out_file) for out_file in out_files)
@@ -787,7 +796,7 @@ def write_nc(
         for feat in features:
             num_nans = np.isnan(df[feat].values).sum()
             nan_frac = num_nans / df[feat].size
-            if nan_frac < 1.0:
+            if nan_frac < nan_cap:
                 valid_files[feat].append(file)
                 data_vars[feat].append(df[feat].values[:, None])
 
@@ -819,6 +828,6 @@ def write_nc(
             all_files=filt_files,
             out_file=out_files[feat],
             bbox=bbox,
-            networks=networks,
+            network=network,
             overwrite=overwrite,
         )
