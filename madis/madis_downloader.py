@@ -107,6 +107,7 @@ class MadisDownloader:
         process_dir=None,
         start_date=None,
         end_date=None,
+        min_qc_level=1,
     ):
         unpack_dir = unpack_dir or download_dir
         process_dir = process_dir or download_dir
@@ -117,6 +118,7 @@ class MadisDownloader:
         self.start_date = start_date
         self.end_date = end_date
         self.dates = self.get_dates(start_date, end_date)
+        self.min_level = min_qc_level
         os.makedirs(self.download_dir, exist_ok=True)
         os.makedirs(self.unpack_dir, exist_ok=True)
         os.makedirs(self.process_dir, exist_ok=True)
@@ -138,6 +140,15 @@ class MadisDownloader:
 
     def download(self, max_workers=32, overwrite=False):
         """Download raw files for the given network and date range."""
+        out_files = [
+            self.get_fp(date, self.download_dir) for date in self.dates
+        ]
+        if all(os.path.exists(file) for file in out_files) and not overwrite:
+            logger.info(
+                f'All files for {self.network} network from {self.start_date} '
+                f'to {self.end_date} already exist. Skipping download.'
+            )
+            return
         logger.info(
             f'Starting download for {self.network} from {self.start_date} to '
             f'{self.end_date}'
@@ -218,6 +229,7 @@ class MadisDownloader:
                 for file in files
             ]
             overwrites = [overwrite] * len(out_files)
+            min_levels = [self.min_level] * len(out_files)
             if (
                 all(os.path.exists(file) for file in out_files)
                 and not overwrite
@@ -234,7 +246,8 @@ class MadisDownloader:
             )
             with multiprocessing.Pool(max_workers) as pool:
                 pool.starmap(
-                    self.write_processed_csv, zip(files, out_files, overwrites)
+                    self.write_processed_csv,
+                    zip(files, out_files, min_levels, overwrites),
                 )
 
     def get_unpacked_meta_file(self, year, bbox):
@@ -366,7 +379,9 @@ class MadisDownloader:
             logger.debug(f'Saved {outfile}')
 
     @classmethod
-    def write_processed_csv(cls, infile, outfile, overwrite=False):
+    def write_processed_csv(
+        cls, infile, outfile, min_level=1, overwrite=False
+    ):
         """Write the processed data to a csv file."""
         if os.path.exists(outfile) and not overwrite:
             logger.debug(f'File {outfile} already exists. Skipping write.')
@@ -374,7 +389,7 @@ class MadisDownloader:
         df = cls._read_csv(infile)
 
         logger.debug(f'Doing QC on {infile}.')
-        df = cls.do_quality_control(df)
+        df = cls.do_quality_control(df, min_level=min_level)
 
         qc_cols = [c for c in df.columns if 'DD' in c]
         df = df.drop(qc_cols, axis=1)
@@ -479,7 +494,12 @@ class MadisDownloader:
         """Read a csv file and return a dataframe. Picklable method with
         logging."""
         logger.debug(f'Reading file: {file}')
-        return pd.read_csv(file, index_col=0)
+        try:
+            out = pd.read_csv(file, index_col=0)
+        except Exception as e:
+            logger.error(f'Error reading file: {file}.')
+            raise e
+        return out
 
     @classmethod
     def _read_single_file(cls, file):
@@ -565,26 +585,36 @@ class MadisDownloader:
         return mask
 
     @classmethod
-    def do_quality_control(cls, df):
+    def do_quality_control(cls, df, min_level=1):
         """Make sure all variables pass all QC checks, are greater than 0, and
         non-repeating"""
-        var_names = [
-            var_name for var_name in RAW_VARIABLES if var_name in df
-        ]
+        var_names = [var_name for var_name in RAW_VARIABLES if var_name in df]
         for var_name in var_names:
             # pass level 1, 2, 3 checks == V, pass level 1, 2 checks == S,
-            # subjective good checks == G, positive values only, non-repeating
-            # values
+            # pass level 1 checks == C, subjective good checks == G, positive
+            # values only, non-repeating values
+
+            cor_check = df[f'{var_name}DD'].values.astype(str) == 'C'
             ver_check = df[f'{var_name}DD'].values.astype(str) == 'V'
             scr_check = df[f'{var_name}DD'].values.astype(str) == 'S'
+
+            assert min_level in [1, 2, 3], 'min_level must be 1, 2, or 3'
+            if min_level == 1:
+                # Keep all levels
+                qc_check = scr_check | ver_check | cor_check
+            elif min_level == 2:
+                # Keep only level 2 and 3
+                qc_check = scr_check | ver_check
+            else:
+                # Keep only level 3
+                qc_check = scr_check | ver_check | cor_check
+
             good_check = df[f'{var_name}DD'].values.astype(str) == 'G'
+            qc_check |= good_check
+
             positive_check = df[var_name] > 0
             varying_check = ~cls.constant_check(df[var_name].values)
-            check = (
-                (scr_check | ver_check | good_check)
-                & positive_check
-                & varying_check
-            )
+            check = qc_check & positive_check & varying_check
             df.loc[~check, var_name] = np.nan
             logger.debug(
                 f'Filtered {(~check).sum()} / {len(check)} time steps '
@@ -757,7 +787,7 @@ def write_nc(
         for feat in features:
             num_nans = np.isnan(df[feat].values).sum()
             nan_frac = num_nans / df[feat].size
-            if nan_frac < 0.8:
+            if nan_frac < 1.0:
                 valid_files[feat].append(file)
                 data_vars[feat].append(df[feat].values[:, None])
 
