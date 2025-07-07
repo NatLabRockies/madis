@@ -401,6 +401,11 @@ class MadisDownloader:
                 df[var_name] = np.nan
         df = df[list(RAW_VARIABLES.values())]
 
+        if len(df) == 0:
+            logger.warning(
+                f'No data found in {infile} after processing. Skipping file.'
+            )
+            return
         try:
             df = cls.convert_vars(df)
             df = cls.enforce_ranges(df)
@@ -500,6 +505,18 @@ class MadisDownloader:
             logger.error(f'Error reading file: {file}.')
             raise e
         return out
+
+    @classmethod
+    def _read_and_filter(cls, file):
+        """Read a file and filter out rows with NaN values."""
+        df = cls._read_csv(file)
+        features = [f for f in df.columns if f in OUT_VARIABLES]
+        try:
+            df = None if df[features].isnull().all().all() else df
+        except KeyError as e:
+            logger.error(f'Error filtering file {file}: {e}')
+            return None
+        return df
 
     @classmethod
     def _read_single_file(cls, file):
@@ -789,16 +806,21 @@ def write_nc(
     )
 
     with multiprocessing.Pool(max_workers) as pool:
-        dfs = pool.map(MadisDownloader._read_csv, filt_files)
+        dfs = pool.map(MadisDownloader._read_and_filter, filt_files)
+    dfs = [df for df in dfs if df is not None]
 
     logger.info('Filtering files based on NaN fraction...')
     for df, file in tqdm(zip(dfs, filt_files), total=len(dfs)):
         for feat in features:
-            num_nans = np.isnan(df[feat].values).sum()
-            nan_frac = num_nans / df[feat].size
-            if nan_frac < nan_cap:
-                valid_files[feat].append(file)
-                data_vars[feat].append(df[feat].values[:, None])
+            try:
+                num_nans = np.isnan(df[feat].values).sum()
+                nan_frac = num_nans / df[feat].size
+                if nan_frac < nan_cap:
+                    valid_files[feat].append(file)
+                    data_vars[feat].append(df[feat].values[:, None])
+            except IOError as e:
+                logger.error(f'Error parsing data from file {file}: {e}')
+                continue
 
     good_feats = []
     for feature in features:

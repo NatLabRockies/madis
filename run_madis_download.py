@@ -71,6 +71,13 @@ parser.add_argument(
     """,
 )
 parser.add_argument(
+    '-min_qc_level',
+    type=int,
+    default=1,
+    help="""Minimum quality control level to use in processing. Level 3 is the
+    highest and level 1 is the lowest.""",
+)
+parser.add_argument(
     '--download',
     action='store_true',
     default=False,
@@ -147,6 +154,7 @@ if __name__ == '__main__':
                     download_dir=args.out_dir,
                     start_date=start_date,
                     end_date=end_date,
+                    min_qc_level=args.min_qc_level,
                 )
                 if args.download:
                     downloader.download(
