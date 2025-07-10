@@ -612,8 +612,8 @@ class MadisDownloader:
             # values only, non-repeating values
 
             cor_check = df[f'{var_name}DD'].values.astype(str) == 'C'
-            ver_check = df[f'{var_name}DD'].values.astype(str) == 'V'
             scr_check = df[f'{var_name}DD'].values.astype(str) == 'S'
+            ver_check = df[f'{var_name}DD'].values.astype(str) == 'V'
 
             assert min_level in [1, 2, 3], 'min_level must be 1, 2, or 3'
             if min_level == 1:
@@ -624,7 +624,7 @@ class MadisDownloader:
                 qc_check = scr_check | ver_check
             else:
                 # Keep only level 3
-                qc_check = scr_check | ver_check | cor_check
+                qc_check = ver_check
 
             good_check = df[f'{var_name}DD'].values.astype(str) == 'G'
             qc_check |= good_check
@@ -793,6 +793,7 @@ def write_nc(
         )
         return
 
+    logger.info(f'Writing netCDF files for {network} {year}...')
     filt_files = MadisDownloader.filter_files_for_region(files, bbox)
     logger.info(
         f'Filtered {len(files) - len(filt_files)} / {len(files)} files for '
@@ -819,7 +820,9 @@ def write_nc(
                     valid_files[feat].append(file)
                     data_vars[feat].append(df[feat].values[:, None])
             except IOError as e:
-                logger.error(f'Error parsing data from file {file}: {e}')
+                logger.error(
+                    f'Error parsing {feat} data from file {file}: {e}'
+                )
                 continue
 
     good_feats = []

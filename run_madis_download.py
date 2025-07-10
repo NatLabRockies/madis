@@ -185,9 +185,6 @@ if __name__ == '__main__':
                 proc_files = sorted(glob(f'{proc_dir}/{year}_*.csv'))
                 if args.write_nc and len(proc_files) > 0:
                     out_dir = f'{args.out_dir}/{args.region}/final/'
-                    logger.info(
-                        f'Writing netCDF files for {network} {year}...'
-                    )
                     write_nc(
                         year,
                         proc_files,
