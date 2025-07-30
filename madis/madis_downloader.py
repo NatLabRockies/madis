@@ -83,7 +83,7 @@ RAW_VARIABLES = {
 
 # Time step for the final time series data - this the frequency used in time
 # series interpolation and resampling.
-FREQ = '30min'
+FREQ = '60min'
 
 # valid ranges for each variable - this needs to include all variables
 # that are expected in the final processed data.
@@ -267,7 +267,13 @@ class MadisDownloader:
             f'{self.unpack_dir}/{year}/{year}_{key}.csv'
             for key in meta_file['lat_lon_str']
         ]
-        return all(os.path.exists(file) for file in out_files)
+        out = all(os.path.exists(file) for file in out_files)
+        if not out:
+            logger.debug(
+                f'Not all unpacked files exist for {self.network} network '
+                f'for year {year} and bbox {bbox}.'
+            )
+        return out
 
     def write_unpacked_meta(self, year, bbox, dfs, overwrite=False):
         """Write the unpacked meta file for the given year and bbox."""
@@ -379,6 +385,15 @@ class MadisDownloader:
             logger.debug(f'Saved {outfile}')
 
     @classmethod
+    def merge_dup_cols(cls, df, col):
+        """Merge duplicate columns in a dataframe."""
+        if col in df.columns and len(df[col].shape) > 1:
+            tmp = np.nanmean(df[col].values, axis=1)
+            df = df.drop(col, axis=1)
+            df[col] = tmp
+        return df
+
+    @classmethod
     def write_processed_csv(
         cls, infile, outfile, min_level=1, overwrite=False
     ):
@@ -394,18 +409,24 @@ class MadisDownloader:
         qc_cols = [c for c in df.columns if 'DD' in c]
         df = df.drop(qc_cols, axis=1)
         df = df.rename(RAW_VARIABLES, axis=1)
+        df = cls.merge_dup_cols(df, 'pressure_0m')
 
         # Ensure all required output variables are present
         for var_name in set(RAW_VARIABLES.values()):
             if var_name not in df:
                 df[var_name] = np.nan
-        df = df[list(RAW_VARIABLES.values())]
+        df = df[list(set(RAW_VARIABLES.values()))]
 
         if len(df) == 0:
             logger.warning(
                 f'No data found in {infile} after processing. Skipping file.'
             )
             return
+
+        for col in set(RAW_VARIABLES.values()):
+            mask = np.abs(df[col].values) > 1e30
+            df.loc[mask, col] = np.nan
+
         try:
             df = cls.convert_vars(df)
             df = cls.enforce_ranges(df)
@@ -660,11 +681,27 @@ class MadisDownloader:
         return data
 
     @classmethod
+    def derive_relativehumidity(cls, data):
+        """Calculate relative humidity from dewpoint and temperature if not
+        availble directly."""
+        water_vapor_pressure = 6.1078 * np.exp(
+            17.1 * data['d2m'] / (235 + data['d2m'])
+        )
+        saturation_water_vapor_pressure = 6.1078 * np.exp(
+            17.1 * data['temperature_2m'] / (235 + data['temperature_2m'])
+        )
+        return 100 * water_vapor_pressure / saturation_water_vapor_pressure
+
+    @classmethod
     def get_relativehumidity(cls, data):
         """Calculate relative humidity from dewpoint and temperature if not
         availble directly."""
         if 'relativehumidity_2m' in data:
-            return data['relativehumidity_2m']
+            out = data['relativehumidity_2m']
+            mask = np.isnan(out.values)
+            if mask.any():
+                out[mask] = cls.derive_relativehumidity(data[mask])
+            return out
         water_vapor_pressure = 6.1078 * np.exp(
             17.1 * data['d2m'] / (235 + data['d2m'])
         )
@@ -684,6 +721,14 @@ class MadisDownloader:
         data['v_10m'] = -data['windspeed_10m'] * np.cos(
             np.deg2rad(data['winddirection_10m'])
         )
+        ws = np.hypot(data['u_10m'].values, data['v_10m'].values)
+        mask = ~np.isnan(data['windspeed_10m'].values)
+        mask &= np.abs(data['windspeed_10m'].values - ws) > 0.01
+        msg = (
+            'Wind speed and direction do not match u/v components: '
+            f'{ws[mask]}, {data["windspeed_10m"].values[mask]}'
+        )
+        assert mask.sum() == 0, msg
         data['relativehumidity_2m'] = cls.get_relativehumidity(data)
         data = data.drop(['windspeed_10m', 'winddirection_10m'], axis=1)
         return data
@@ -778,7 +823,7 @@ def write_nc(
     """Write all csv data to an nc file"""
     os.makedirs(out_dir, exist_ok=True)
     features = pd.read_csv(files[0], index_col=0).columns
-    features = [f for f in features if f in OUT_VARIABLES]
+    features = [f for f in OUT_VARIABLES if f in features]
     out_files = {
         feat: out_dir + f'madis_{network}_{feat}_{year}.nc'
         for feat in features
