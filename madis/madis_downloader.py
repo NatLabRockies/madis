@@ -596,7 +596,9 @@ class MadisDownloader:
         df = df[coord_mask]
         keep_sites = df['lat_lon_str'].nunique()
         logger.info(
-            f'Keeping {keep_sites} / {total_sites} sites based on region.'
+            f'Keeping {keep_sites} / {total_sites} sites based on region. min '
+            f'/ max lattiude: {df.latitude.min()} / {df.latitude.max()}. min '
+            f'/ max longitude: {df.longitude.min()} / {df.longitude.max()}.'
         )
         df = df.drop(['latitude', 'longitude'], axis=1, errors='ignore')
         time_key = 'timeObs' if 'timeObs' in df else 'observationTime'
@@ -755,12 +757,14 @@ def _write_nc(
         os.path.basename(file).replace('.csv', '').split('_')
         for file in valid_files[feature]
     ]
-    lats = [bf[1] for bf in splits]
-    lons = [bf[2] for bf in splits]
+    lats = np.array([bf[1] for bf in splits]).astype(float)
+    lons = np.array([bf[2] for bf in splits]).astype(float)
 
     logger.info(
         f'Keeping {len(valid_files[feature])} / {len(all_files)} coordinates '
-        f'for {feature} based on region and NaN filtering.',
+        f'for {feature} based on region and NaN filtering. min / max '
+        f'latitude: {min(lats):.2f} / {max(lats):.2f}. min / max longitude: '
+        f'{min(lons):.2f} / {max(lons):.2f}.',
     )
 
     meta = pd.DataFrame()
@@ -810,6 +814,11 @@ def _write_nc(
     logger.info(f'Saved {out_file}')
 
 
+def check_nans(file, df, valid_files, data_vars, features, nan_cap=1.0):
+    """Check whether data for given features in the given file meets the nan
+    cap condition"""
+
+
 def write_nc(
     year,
     files,
@@ -837,7 +846,6 @@ def write_nc(
             'Skipping write.'
         )
         return
-
     logger.info(f'Writing netCDF files for {network} {year}...')
     filt_files = MadisDownloader.filter_files_for_region(files, bbox)
     logger.info(
@@ -853,22 +861,23 @@ def write_nc(
 
     with multiprocessing.Pool(max_workers) as pool:
         dfs = pool.map(MadisDownloader._read_and_filter, filt_files)
+
+    filt_files = [file for file, df in zip(filt_files, dfs) if df is not None]
     dfs = [df for df in dfs if df is not None]
+    dfs = dict(zip(filt_files, dfs))
 
     logger.info('Filtering files based on NaN fraction...')
-    for df, file in tqdm(zip(dfs, filt_files), total=len(dfs)):
-        for feat in features:
+    for file, df in tqdm(dfs.items(), total=len(dfs)):
+        for feature in features:
             try:
-                num_nans = np.isnan(df[feat].values).sum()
-                nan_frac = num_nans / df[feat].size
-                if nan_frac < nan_cap:
-                    valid_files[feat].append(file)
-                    data_vars[feat].append(df[feat].values[:, None])
-            except IOError as e:
+                num_nans = np.isnan(df[feature].values).sum()
+                if num_nans < nan_cap * len(df[feature].values):
+                    valid_files[feature].append(file)
+                    data_vars[feature].append(df[feature].values[:, None])
+            except OSError as e:
                 logger.error(
-                    f'Error parsing {feat} data from file {file}: {e}'
+                    f'Error parsing {feature} data from file {file}: {e}'
                 )
-                continue
 
     good_feats = []
     for feature in features:
@@ -877,8 +886,8 @@ def write_nc(
                 f'No valid data found for feature {feature} in year {year}. '
                 'Skipping this feature.'
             )
-            continue
-        good_feats.append(feature)
+        else:
+            good_feats.append(feature)
 
     for feat in good_feats:
         try:

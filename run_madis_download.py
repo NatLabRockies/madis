@@ -187,7 +187,7 @@ if __name__ == '__main__':
                     out_dir = f'{args.out_dir}/{args.region}/final/'
                     write_nc(
                         year,
-                        proc_files,
+                        files=proc_files,
                         out_dir=out_dir,
                         bbox=DOMAINS[args.region]['area'],
                         overwrite=args.overwrite,
