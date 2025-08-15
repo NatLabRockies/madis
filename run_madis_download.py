@@ -56,6 +56,14 @@ parser.add_argument(
     specify it here, e.g. `-networks crn`.""",
 )
 parser.add_argument(
+    '-features',
+    type=str,
+    nargs='*',
+    default='all',
+    help="""List of features to write to netcdf files. Default is all features
+    in the processed files.""",
+)
+parser.add_argument(
     '-max_workers',
     type=int,
     default=64,
@@ -187,6 +195,7 @@ if __name__ == '__main__':
                     out_dir = f'{args.out_dir}/{args.region}/final/'
                     write_nc(
                         year,
+                        features=args.features,
                         files=proc_files,
                         out_dir=out_dir,
                         bbox=DOMAINS[args.region]['area'],

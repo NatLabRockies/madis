@@ -825,25 +825,29 @@ def write_nc(
     out_dir,
     bbox,
     network,
+    features='all',
     overwrite=False,
     max_workers=32,
     nan_cap=1.0,
 ):
     """Write all csv data to an nc file"""
     os.makedirs(out_dir, exist_ok=True)
-    features = pd.read_csv(files[0], index_col=0).columns
+
+    if features == 'all':
+        features = pd.read_csv(files[0], index_col=0).columns
     features = [f for f in OUT_VARIABLES if f in features]
+
     out_files = {
         feat: out_dir + f'madis_{network}_{feat}_{year}.nc'
         for feat in features
     }
     if (
-        all(os.path.exists(out_file) for out_file in out_files)
+        all(os.path.exists(out_file) for out_file in out_files.values())
         and not overwrite
     ):
         logger.info(
-            f'Files {out_files} for year {year} already exist in {out_dir}. '
-            'Skipping write.'
+            f'Files {out_files.values()} for year {year} already exist in '
+            f'{out_dir}. Skipping write.'
         )
         return
     logger.info(f'Writing netCDF files for {network} {year}...')
