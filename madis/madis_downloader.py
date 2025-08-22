@@ -838,7 +838,7 @@ def write_nc(
     features = [f for f in OUT_VARIABLES if f in features]
 
     out_files = {
-        feat: out_dir + f'madis_{network}_{feat}_{year}.nc'
+        feat: os.path.join(out_dir, f'madis_{network}_{feat}_{year}.nc')
         for feat in features
     }
     if (
@@ -846,8 +846,8 @@ def write_nc(
         and not overwrite
     ):
         logger.info(
-            f'Files {out_files.values()} for year {year} already exist in '
-            f'{out_dir}. Skipping write.'
+            f'Files {list(out_files.values())} for year {year} already exist '
+            f'in {out_dir}. Skipping write.'
         )
         return
     logger.info(f'Writing netCDF files for {network} {year}...')

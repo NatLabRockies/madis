@@ -47,6 +47,14 @@ parser.add_argument(
     stored in `processed/<network>`.""",
 )
 parser.add_argument(
+    '-nc_dir',
+    type=str,
+    default=None,
+    help="""Output directory for netcdf file. netcdf files will be stored in
+    `nc_dir`. If this directory does not exist, it will be created. This
+    does not do anything if `--write_nc` is not set.""",
+)
+parser.add_argument(
     '-networks',
     type=str,
     nargs='*',
@@ -192,12 +200,13 @@ if __name__ == '__main__':
                 proc_dir = f'{args.out_dir}/processed/{network}/{year}/'
                 proc_files = sorted(glob(f'{proc_dir}/{year}_*.csv'))
                 if args.write_nc and len(proc_files) > 0:
-                    out_dir = f'{args.out_dir}/{args.region}/final/'
+                    if args.nc_dir is None:
+                        args.nc_dir = f'{args.out_dir}/{args.region}/final/'
                     write_nc(
                         year,
                         features=args.features,
                         files=proc_files,
-                        out_dir=out_dir,
+                        out_dir=args.nc_dir,
                         bbox=DOMAINS[args.region]['area'],
                         overwrite=args.overwrite,
                         max_workers=args.max_workers,
