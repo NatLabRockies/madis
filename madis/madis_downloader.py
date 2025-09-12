@@ -807,9 +807,9 @@ def _write_nc(
             'source': BASEURL,
         },
     )
-
+    encoding = {feature: {'chunksizes': (2000, 500)}}
     logger.info(f'Writing {feature} to netcdf file {out_file}.')
-    ds.to_netcdf(out_file + '.tmp')
+    ds.to_netcdf(out_file + '.tmp', encoding=encoding)
     os.replace(out_file + '.tmp', out_file)
     logger.info(f'Saved {out_file}')
 
