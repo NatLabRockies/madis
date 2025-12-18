@@ -625,9 +625,14 @@ class MadisDownloader:
         return mask
 
     @classmethod
-    def do_quality_control(cls, df, min_level=1):
+    def do_quality_control(cls, df, min_level=0):
         """Make sure all variables pass all QC checks, are greater than 0, and
         non-repeating"""
+
+        if min_level == 0:
+            logger.info('Skipping QC checks as min_level is 0.')
+            return df
+
         var_names = [var_name for var_name in RAW_VARIABLES if var_name in df]
         for var_name in var_names:
             # pass level 1, 2, 3 checks == V, pass level 1, 2 checks == S,

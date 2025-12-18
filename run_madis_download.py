@@ -41,10 +41,24 @@ parser.add_argument(
 parser.add_argument(
     'out_dir',
     type=str,
-    help="""Parent output directory. Raw downloads will be stored in
-    subdirectories of this directory, e.g., `out_dir/raw/<network>`. Unpacked
-    files will be stored in `unpacked/<network>`, and processed files will be
-    stored in `processed/<network>`.""",
+    help="""Parent download directory. Raw downloads will be stored in
+    subdirectories of this directory, e.g., `out_dir/raw/<network>`""",
+)
+parser.add_argument(
+    '-unpack_dir',
+    type=str,
+    default=None,
+    help="""Parent unpack directory. Unpacked files will be stored in
+    subdirectories of this directory, e.g., `unpack_dir/unpacked/<network>`.
+    If None this defaults to `out_dir/unpacked/<network>`."""
+)
+parser.add_argument(
+    '-process_dir',
+    type=str,
+    default=None,
+    help="""Parent process directory. Processed files will be stored in
+    subdirectories of this directory, e.g., `process_dir/processed/<network>`.
+    If None this defaults to `out_dir/processed/<network>`."""
 )
 parser.add_argument(
     '-nc_dir',
@@ -91,7 +105,8 @@ parser.add_argument(
     type=int,
     default=1,
     help="""Minimum quality control level to use in processing. Level 3 is the
-    highest and level 1 is the lowest.""",
+    highest and level 0 is the lowest. If this is set to 0, no quality
+    control checks will be performed.""",
 )
 parser.add_argument(
     '--download',
@@ -168,6 +183,8 @@ if __name__ == '__main__':
                 downloader = MadisDownloader(
                     network=network,
                     download_dir=args.out_dir,
+                    unpack_dir=args.unpack_dir,
+                    process_dir=args.process_dir,
                     start_date=start_date,
                     end_date=end_date,
                     min_qc_level=args.min_qc_level,
