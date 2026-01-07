@@ -19,8 +19,10 @@ def filter_linear_gaps(da, diff_threshold=1e-4, n_threshold=3):
     of consecutive linear data and sets that data to NaN
 
     This filter was developed on Mesonet station data for temperature and
-    humidity and has not yet been tested on other variables. Leave comments
-    here when other variables have been successfully filtered with this.
+    humidity and has not yet been tested on other variables. It has also
+    successfully been applied to windspeed, wind direction, wind gust, and
+    surface pressure. Leave comments here when other variables have been
+    successfully filtered with this.
 
     Parameters
     ----------
@@ -45,7 +47,7 @@ def filter_linear_gaps(da, diff_threshold=1e-4, n_threshold=3):
 
     _preflight(da)
     bad_mask = da.copy().astype(bool)
-    bad_mask.name = 'bad_spikes'
+    bad_mask.name = 'bad_linear_gaps'
 
     for idx in da['space']:
         ida = da[:, idx]
@@ -83,9 +85,10 @@ def filter_spikes(da, diff_threshold=15, ex_percentile=2):
     This function identifies spikes that are both dramatic (large 1st
     derivative) and also extreme (outside a percentile threshold)
 
-    This filter was developed on Mesonet station data for temperature and
-    humidity and has not yet been tested on other variables. Leave comments
-    here when other variables have been successfully filtered with this.
+    This filter was developed on Mesonet station data for temperature,
+    humidity, windspeed, and wind gust and has not yet been tested on other
+    variables. Leave comments here when other variables have been successfully
+    filtered with this.
 
     Parameters
     ----------
@@ -189,6 +192,54 @@ def filter_seasonal_anomalies(da, nstd=4):
 
     return da, bad_mask
 
+def filter_value_range(da, lower=None, upper=None):
+    """Some MADIS observations appear to have values outside of the expected
+    valid variable range. This function identifies values outside of specified bounds
+    and sets those to NaN.
+
+    Parameters
+    ----------
+    da : xr.DataArray
+        2D array with coordinates ("time", "space") for multiple observation
+        stations in a given region for a single variable
+    lower : float
+        Lower bound for acceptable values. Values below this will be flagged.
+    upper : float
+        Upper bound for acceptable values. Values above this will be flagged.
+
+    Returns
+    -------
+    da : xr.DataArray
+        Same as input but cleaned!
+    bad_mask : xr.DataArray
+        Mask showing which values are bad (True where bad).
+        Same dimensionality as da.
+    """
+    if lower is None and upper is None:
+        bad_mask = xr.zeros_like(da, dtype=bool)
+        bad_mask.name = 'bad_value_range'
+        return da, bad_mask
+
+    _preflight(da)
+    bad_mask = da.copy().astype(bool)
+    bad_mask.name = 'bad_value_range'
+
+    for idx in da['space']:
+        ida = da[:, idx]
+
+        ibad_mask = ida.copy().astype(bool)
+        ibad_mask[...] = False
+        
+        if lower is not None:
+            ibad_mask |= ida < lower
+        if upper is not None:
+            ibad_mask |= ida > upper
+
+        ida[ibad_mask] = np.nan
+        da[:, idx] = ida
+        bad_mask[:, idx] = ibad_mask
+
+    return da, bad_mask
 
 def run_filter_bank(da, config):
     """Run a set of filters on a collection of observation stations in a
@@ -230,6 +281,36 @@ def run_filter_bank(da, config):
     return da, final_mask, filter_masks
 
 
+CONFIG_WS10M ={
+    filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=3),
+    filter_spikes: dict(diff_threshold=15, ex_percentile=1),
+    filter_value_range: dict(lower = 0, upper = 66),
+}
+"""Config for run_filter_bank to clean 10-meter windspeed.
+Upper limit of based on regional maximum official wind gust of 66 m/s.
+Ex-percentile of 1 to retain extreme windspeed events."""
+
+CONFIG_WDIR10M = {
+    filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=3),
+    filter_value_range: dict(lower = 0, upper = 360),
+}
+"""Config for run_filter_bank to clean 10-meter wind direction."""
+
+CONFIG_GUST10M ={
+    filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=3),
+    filter_spikes: dict(diff_threshold=20, ex_percentile=1),
+    filter_value_range: dict(lower = 0, upper = 66),
+}
+"""Config for run_filter_bank to clean 10-meter wind gusts.
+Upper limit of based on regional maximum official wind gust of 66 m/s.
+Ex-percentile of 1 to retain extreme windspeed events."""
+
+CONFIG_P0M ={
+    filter_seasonal_anomalies: dict(nstd=4),
+    filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=3),
+}
+"""Config for ``run_filter_bank`` to clean near-surface pressure"""
+
 CONFIG_T2M = {
     filter_seasonal_anomalies: dict(nstd=4),
     filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=3),
@@ -241,6 +322,7 @@ CONFIG_RH2M = {
     filter_seasonal_anomalies: dict(nstd=4),
     filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=3),
     filter_spikes: dict(diff_threshold=15, ex_percentile=2),
+    filter_value_range: dict(lower = 0, upper = 100),
 }
 """Config for ``run_filter_bank`` to clean near-surface 2-meter relative
-humiditiy"""
+humidity"""
