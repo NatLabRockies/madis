@@ -95,7 +95,7 @@ def filter_linear_gaps(da, diff_threshold=1e-4, n_threshold=3):
     return da, bad_mask
 
 
-def filter_spikes(da, diff_threshold=15, ex_percentile=2):
+def filter_spikes(da, diff_threshold=15, ex_percentile=2, max_spike_length=3):
     """Some MADIS timeseries data appears to have momentary extreme spikes.
     This function identifies spikes that are both dramatic (large 1st
     derivative) and also extreme (outside a percentile threshold)
@@ -136,21 +136,24 @@ def filter_spikes(da, diff_threshold=15, ex_percentile=2):
 
     for idx in da['space']:
         ida = da[:, idx]
+        valid_mask = ~np.isnan(ida)
+        valid_idx = np.where(valid_mask)[0]
+        valid_values = ida[valid_mask].values
 
         diff_nonan = np.abs(ida[~np.isnan(ida)].diff('time').values)
-        diff_nonan = np.concatenate((diff_nonan, [0]))
-
-        diff1 = np.zeros(len(ida))
-        diff1[~np.isnan(ida)] = diff_nonan
-        diff1_roll = np.roll(diff1, 1)
-        spike_mask = (diff1 > diff_threshold) & (diff1_roll > diff_threshold)
+        
+        spike_mask_compressed = np.zeros(len(valid_values), dtype=bool)
+        spike_mask_compressed[1:-1] = (diff_nonan[:-1] > diff_threshold) & (diff_nonan[1:] > diff_threshold)
 
         top_p = 100 - ex_percentile
-        extreme = (ida > np.nanpercentile(ida, top_p)) | (
-            ida < np.nanpercentile(ida, ex_percentile)
-        )
+        extreme_compressed = (valid_values > np.nanpercentile(valid_values, top_p)) | \
+                             (valid_values < np.nanpercentile(valid_values, ex_percentile))
 
-        ibad_mask = spike_mask & extreme
+        bad_compressed = spike_mask_compressed & extreme_compressed
+
+        ibad_mask = np.zeros(len(ida), dtype=bool)
+        ibad_mask[valid_idx] = bad_compressed
+
         ida[ibad_mask] = np.nan
         da[:, idx] = ida
         bad_mask[:, idx] = ibad_mask
