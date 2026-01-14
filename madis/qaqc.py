@@ -194,8 +194,8 @@ def filter_seasonal_anomalies(da, nstd=4):
 
 def filter_value_range(da, lower=None, upper=None):
     """Some MADIS observations appear to have values outside of the expected
-    valid variable range. This function identifies values outside of specified bounds
-    and sets those to NaN.
+    valid variable range. This function identifies values outside of specified
+    bounds and sets those to NaN.
 
     Parameters
     ----------
@@ -222,22 +222,17 @@ def filter_value_range(da, lower=None, upper=None):
 
     _preflight(da)
     bad_mask = da.copy().astype(bool)
+    bad_mask[...] = False
     bad_mask.name = 'bad_value_range'
 
-    for idx in da['space']:
-        ida = da[:, idx]
-
-        ibad_mask = ida.copy().astype(bool)
-        ibad_mask[...] = False
-        
-        if lower is not None:
-            ibad_mask |= ida < lower
-        if upper is not None:
-            ibad_mask |= ida > upper
-
-        ida[ibad_mask] = np.nan
-        da[:, idx] = ida
-        bad_mask[:, idx] = ibad_mask
+    if lower is not None:
+        too_low = da < lower
+        da = xr.where(too_low, np.nan, da)
+        bad_mask = xr.where(too_low, True, bad_mask)
+    if upper is not None:
+        too_high = da > upper
+        da = xr.where(too_high, np.nan, da)
+        bad_mask = xr.where(too_high, True, bad_mask)
 
     return da, bad_mask
 
