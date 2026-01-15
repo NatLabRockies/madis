@@ -5,6 +5,7 @@ import logging
 import numpy as np
 import pandas as pd
 import xarray as xr
+from warnings import warn
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,9 @@ def filter_linear_gaps(da, diff_threshold=1e-4, n_threshold=3):
     successfully been applied to windspeed, wind direction, wind gust, and
     surface pressure. Leave comments here when other variables have been
     successfully filtered with this.
+
+    CAUTION!! If MADIS data is interpolated from hourly to 30min then
+    n_threshold=3 will find linear blocks EVERYWHERE!
 
     Parameters
     ----------
@@ -52,6 +56,13 @@ def filter_linear_gaps(da, diff_threshold=1e-4, n_threshold=3):
     _preflight(da)
     bad_mask = da.copy().astype(bool)
     bad_mask.name = 'bad_linear_gaps'
+
+    ti = pd.to_datetime(da['time'])
+    if ti.inferred_freq == '30min' and n_threshold == 3:
+        msg = ('CAUTION!! If MADIS data is interpolated from hourly to 30min '
+               'then n_threshold=3 will find linear blocks EVERYWHERE!')
+        warn(msg)
+        logger.warning(msg)
 
     for idx in da['space']:
         ida = da[:, idx]
