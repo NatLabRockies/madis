@@ -12,7 +12,10 @@ from glob import glob
 from rex import init_logger
 from xarray import SerializationWarning
 
-from madis.madis_downloader import DOMAINS, MadisDownloader, write_nc
+from madis.constants import DOMAINS
+from madis.download import MadisDownloader
+from madis.process import MadisProcessor, write_nc
+from madis.unpack import MadisUnpacker
 
 init_logger(__name__, log_level='DEBUG')
 logger = logging.getLogger(__name__)
@@ -103,7 +106,7 @@ parser.add_argument(
 parser.add_argument(
     '-min_qc_level',
     type=int,
-    default=1,
+    default=0,
     help="""Minimum quality control level to use in processing. Level 3 is the
     highest and level 0 is the lowest. If this is set to 0, no quality
     control checks will be performed.""",
@@ -180,27 +183,31 @@ if __name__ == '__main__':
             start_date = f'{year}-01-01'
             end_date = f'{year}-12-31'
             for network in args.networks:
-                downloader = MadisDownloader(
-                    network=network,
-                    download_dir=args.out_dir,
-                    unpack_dir=args.unpack_dir,
-                    process_dir=args.process_dir,
-                    start_date=start_date,
-                    end_date=end_date,
-                    min_qc_level=args.min_qc_level,
-                )
                 if args.download:
-                    downloader.download(
+                    downloader = MadisDownloader(
+                        network=network,
+                        download_dir=args.out_dir,
+                        start_date=start_date,
+                        end_date=end_date,
+                    )
+                    downloader.run(
                         max_workers=args.max_workers, overwrite=args.overwrite
                     )
 
                 if args.unpack:
+                    unpacker = MadisUnpacker(
+                        network=network,
+                        download_dir=args.out_dir,
+                        unpack_dir=args.unpack_dir,
+                        start_date=start_date,
+                        end_date=end_date,
+                    )
                     cfp = (
-                        downloader.out_dir + f'/combined_{network}_{{year}}.nc'
+                        f'{args.out_dir}/combined_{network}_{{year}}.nc'
                         if args.use_cache
                         else None
                     )
-                    downloader.unpack(
+                    unpacker.run(
                         max_workers=args.max_workers,
                         overwrite=args.overwrite,
                         bbox=DOMAINS[args.region]['area'],
@@ -208,7 +215,16 @@ if __name__ == '__main__':
                     )
 
                 if args.process:
-                    downloader.process(
+                    processor = MadisProcessor(
+                        network=network,
+                        download_dir=args.out_dir,
+                        unpack_dir=args.unpack_dir,
+                        process_dir=args.process_dir,
+                        start_date=start_date,
+                        end_date=end_date,
+                        min_qc_level=args.min_qc_level,
+                    )
+                    processor.run(
                         max_workers=args.max_workers,
                         overwrite=args.overwrite,
                         bbox=DOMAINS[args.region]['area'],
