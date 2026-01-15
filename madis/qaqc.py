@@ -1,8 +1,12 @@
 """Custom QA/QC data filters for MADIS observational data"""
 
+import logging
+
 import numpy as np
 import pandas as pd
 import xarray as xr
+
+logger = logging.getLogger(__name__)
 
 
 def _preflight(da):
@@ -143,6 +147,101 @@ def filter_spikes(da, diff_threshold=15, ex_percentile=2):
     return da, bad_mask
 
 
+def filter_spike_groups(
+    da,
+    N=3,
+    value_thresh=20,
+    up_thresh=20,
+    down_thresh=20,
+    nan_spikes=True,
+):
+    """Some MADIS timeseries data appears to have extreme spikes with multiple
+    consecutive extreme values. This function identifies spikes that are
+    dramatic (large 1st derivative) and have N consecutive values over a
+    threshold.
+
+    This filter was developed on Mesonet station data for windspeed,
+
+    Parameters
+    ----------
+    da : xr.DataArray
+        2D array with coordinates ("time", "space") for multiple observation
+        stations in a given region for a single variable
+    N : int
+        Number of extreme consecutive values in a row that can be filtered out
+    value_thresh : float
+        All the values N must be above this threshold to be filtered out.
+    up_thresh : float
+        If the first-derivative of da is greater than this value then a value
+        is considered to be the start of a spike
+    down_thresh : float
+        If the first-derivative of da is greater than this value on the way
+        down after an up spike, then a value is considered to be the start of a
+        spike
+    nan_spikes : bool
+        If this is true, consider a NaN immediately before or after the group N
+        to have a value zero so it can contribute to the derivative
+        calculation.
+
+    Returns
+    -------
+    da : xr.DataArray
+        Same as input but cleaned!
+    bad_mask : xr.DataArray
+        Mask showing which values are bad (True where bad).
+        Same dimensionality as da.
+    """
+
+    _preflight(da)
+    bad_mask = da.copy().astype(bool)
+    bad_mask.name = 'bad_linear_gaps'
+    bad_mask[...] = False
+    T = len(da['time'])
+
+    for idx in da['space']:
+        xv = da[:, idx].values
+        if nan_spikes:
+            xv = np.nan_to_num(xv, nan=0)
+
+        # mask of "high/bad" values (NaNs are treated as False)
+        high = np.isfinite(xv) & (xv >= value_thresh)
+
+        # find contiguous True runs in `high`
+        # pad with False on both ends so diff catches edges
+        edges = np.diff(np.r_[False, high, False].astype(np.int8))
+        starts = np.where(edges == 1)[0]  # index in xv where run starts
+        ends = (
+            np.where(edges == -1)[0] - 1
+        )  # index in xv where run ends (inclusive)
+
+        # length constraint: 1..N
+        lengths = ends - starts + 1
+        keep = (lengths >= 1) & (lengths <= N)
+
+        starts = starts[keep]
+        ends = ends[keep]
+
+        # require we can evaluate jump up (start-1 exists)
+        # and jump down (end+1 exists)
+        in_bounds = (starts > 0) & (ends < T - 1)
+        starts = starts[in_bounds]
+        ends = ends[in_bounds]
+
+        # jump conditions
+        jump_up = xv[starts] - xv[starts - 1] >= up_thresh
+        jump_down = xv[ends + 1] - xv[ends] <= -down_thresh
+
+        ok = jump_up & jump_down
+        starts = starts[ok]
+        ends = ends[ok]
+
+        for idstart, idstop in zip(starts, ends):
+            da[slice(idstart, idstop + 1), idx] = np.nan
+            bad_mask[slice(idstart, idstop + 1), idx] = np.nan
+
+    return da, bad_mask
+
+
 def filter_seasonal_anomalies(da, nstd=4):
     """Use seasonal statistics across multiple stations in a single region to
     filter out values that are unrealistic based on time of year in the area
@@ -192,6 +291,7 @@ def filter_seasonal_anomalies(da, nstd=4):
 
     return da, bad_mask
 
+
 def filter_value_range(da, lower=None, upper=None):
     """Some MADIS observations appear to have values outside of the expected
     valid variable range. This function identifies values outside of specified
@@ -222,8 +322,8 @@ def filter_value_range(da, lower=None, upper=None):
 
     _preflight(da)
     bad_mask = da.copy().astype(bool)
-    bad_mask[...] = False
     bad_mask.name = 'bad_value_range'
+    bad_mask[...] = False
 
     if lower is not None:
         too_low = da < lower
@@ -235,6 +335,47 @@ def filter_value_range(da, lower=None, upper=None):
         bad_mask = xr.where(too_high, True, bad_mask)
 
     return da, bad_mask
+
+
+def filter_constant(da, value=None):
+    """Some MADIS observation locations have constant 0 values. This sets them
+    to NaN so they can be dropped later.
+
+    Parameters
+    ----------
+    da : xr.DataArray
+        2D array with coordinates ("time", "space") for multiple observation
+        stations in a given region for a single variable
+    value : float | None
+        Option to set a specific constant value to screen out. If None, this
+        function will check for any station with arbitrary constant value
+
+    Returns
+    -------
+    da : xr.DataArray
+        Same as input but cleaned!
+    bad_mask : xr.DataArray
+        Mask showing which values are bad (True where bad).
+        Same dimensionality as da.
+    """
+
+    _preflight(da)
+    bad_mask = da.copy().astype(bool)
+    bad_mask.name = 'bad_value_range'
+    bad_mask[...] = False
+
+    if value is None:
+        vmin = da.min(dim='time', skipna=True)
+        vmax = da.max(dim='time', skipna=True)
+        constant = vmin == vmax
+    else:
+        constant = (da == value).all('time')
+
+    da[:, constant] = np.nan
+    bad_mask[:, constant] = np.nan
+
+    return da, bad_mask
+
 
 def run_filter_bank(da, config):
     """Run a set of filters on a collection of observation stations in a
@@ -276,10 +417,12 @@ def run_filter_bank(da, config):
     return da, final_mask, filter_masks
 
 
-CONFIG_WS10M ={
+CONFIG_WS10M = {
     filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=3),
-    filter_spikes: dict(diff_threshold=15, ex_percentile=1),
-    filter_value_range: dict(lower = 0, upper = 66),
+    filter_spike_groups: dict(N=3, value_thresh=20, up_thresh=20,
+                              down_thresh=20, nan_spikes=True),
+    filter_value_range: dict(lower=0, upper=66),
+    filter_constant: dict(value=None),
 }
 """Config for run_filter_bank to clean 10-meter windspeed.
 Upper limit of based on regional maximum official wind gust of 66 m/s.
@@ -287,22 +430,25 @@ Ex-percentile of 1 to retain extreme windspeed events."""
 
 CONFIG_WDIR10M = {
     filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=3),
-    filter_value_range: dict(lower = 0, upper = 360),
+    filter_value_range: dict(lower=0, upper=360),
+    filter_constant: dict(value=None),
 }
 """Config for run_filter_bank to clean 10-meter wind direction."""
 
-CONFIG_GUST10M ={
+CONFIG_GUST10M = {
     filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=3),
     filter_spikes: dict(diff_threshold=20, ex_percentile=1),
-    filter_value_range: dict(lower = 0, upper = 66),
+    filter_value_range: dict(lower=0, upper=66),
+    filter_constant: dict(value=None),
 }
 """Config for run_filter_bank to clean 10-meter wind gusts.
 Upper limit of based on regional maximum official wind gust of 66 m/s.
 Ex-percentile of 1 to retain extreme windspeed events."""
 
-CONFIG_P0M ={
+CONFIG_P0M = {
     filter_seasonal_anomalies: dict(nstd=4),
     filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=3),
+    filter_constant: dict(value=None),
 }
 """Config for ``run_filter_bank`` to clean near-surface pressure"""
 
@@ -310,6 +456,7 @@ CONFIG_T2M = {
     filter_seasonal_anomalies: dict(nstd=4),
     filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=3),
     filter_spikes: dict(diff_threshold=15, ex_percentile=2),
+    filter_constant: dict(value=None),
 }
 """Config for ``run_filter_bank`` to clean near-surface 2-meter temperature"""
 
@@ -317,7 +464,8 @@ CONFIG_RH2M = {
     filter_seasonal_anomalies: dict(nstd=4),
     filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=3),
     filter_spikes: dict(diff_threshold=15, ex_percentile=2),
-    filter_value_range: dict(lower = 0, upper = 100),
+    filter_value_range: dict(lower=0, upper=100),
+    filter_constant: dict(value=None),
 }
 """Config for ``run_filter_bank`` to clean near-surface 2-meter relative
 humidity"""
