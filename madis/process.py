@@ -4,6 +4,7 @@ import logging
 import multiprocessing
 import os
 from glob import glob
+from warnings import warn
 
 import dask.array as da
 import numpy as np
@@ -25,9 +26,8 @@ class MadisProcessor:
     def __init__(
         self,
         network,
-        download_dir,
-        unpack_dir=None,
-        process_dir=None,
+        in_dir,
+        out_dir,
         start_date=None,
         end_date=None,
         min_qc_level=0,
@@ -38,14 +38,10 @@ class MadisProcessor:
         ----------
         network : str
             The MADIS network.
-        download_dir : str
-            The base directory.
-        unpack_dir : str, optional
-            The directory containing unpacked CSV files. If None, uses
-            download_dir.
-        process_dir : str, optional
-            The directory to save processed files. If None, uses
-            download_dir.
+        in_dir : str, optional
+            The parent directory containing unpacked CSV files.
+        out_dir : str, optional
+            The parent directory to save processed files.
         start_date : str, optional
             Start date in 'YYYY-MM-DD' format.
         end_date : str, optional
@@ -55,24 +51,22 @@ class MadisProcessor:
             QC applied.
         """
 
-        unpack_dir = unpack_dir or download_dir
-        process_dir = process_dir or download_dir
         self.network = network
-        self.unpack_dir = f'{unpack_dir}/unpacked/{network}'
-        self.process_dir = f'{process_dir}/processed/{network}'
+        self.in_dir = f'{in_dir}/{network}'
+        self.out_dir = f'{out_dir}/{network}'
         self.start_date = start_date
         self.end_date = end_date
         self.dates = get_dates(start_date, end_date)
         self.min_level = min_qc_level
-        os.makedirs(self.process_dir, exist_ok=True)
+        os.makedirs(self.out_dir, exist_ok=True)
 
     def unpacked_files(self, year):
         """Get a list of unpacked files for the network."""
-        return sorted(glob(f'{self.unpack_dir}/{year}/*.csv', recursive=True))
+        return sorted(glob(f'{self.in_dir}/{year}/*.csv', recursive=True))
 
     def processed_files(self, year):
         """Get a list of processed files for the network."""
-        return sorted(glob(f'{self.process_dir}/{year}/*.csv', recursive=True))
+        return sorted(glob(f'{self.out_dir}/{year}/*.csv', recursive=True))
 
     def run(self, bbox, max_workers=32, overwrite=False):
         """Process the unpacked data into cleaned timeseries csv files.
@@ -86,6 +80,10 @@ class MadisProcessor:
         overwrite : bool, optional
             Whether to overwrite existing files. Default is False.
         """
+        if self.min_level == 0:
+            msg = 'Skipping QC checks as min_level is 0.'
+            warn(msg)
+            logger.warning(msg)
         for year in {date.year for date in self.dates}:
             files = self.unpacked_files(year)
             if not files:
@@ -94,15 +92,12 @@ class MadisProcessor:
                     f'year {year}.'
                 )
                 continue
-            os.makedirs(f'{self.process_dir}/{year}', exist_ok=True)
+            os.makedirs(f'{self.out_dir}/{year}', exist_ok=True)
             files = self.filter_files_for_region(files, bbox)
             out_files = [
-                f'{self.process_dir}/{year}/{os.path.basename(file)}'
+                f'{self.out_dir}/{year}/{os.path.basename(file)}'
                 for file in files
             ]
-            overwrites = [overwrite] * len(out_files)
-            min_levels = [self.min_level] * len(out_files)
-            years = [year] * len(out_files)
             if (
                 all(os.path.exists(file) for file in out_files)
                 and not overwrite
@@ -117,11 +112,22 @@ class MadisProcessor:
                 f'Processing {len(files)} unpacked files for {self.network} '
                 f'network for year {year}...'
             )
-            with multiprocessing.Pool(max_workers) as pool:
-                pool.starmap(
-                    self.write_processed_csv,
-                    zip(files, out_files, years, min_levels, overwrites),
-                )
+
+            overwrites = [overwrite] * len(out_files)
+            min_levels = [self.min_level] * len(out_files)
+            years = [year] * len(out_files)
+            iterator = zip(files, out_files, years, min_levels, overwrites)
+
+            if max_workers == 1:
+                for infile, outfile, yr, min_level, ow in tqdm(
+                    iterator, total=len(out_files)
+                ):
+                    self.write_processed_csv(
+                        infile, outfile, yr, min_level=min_level, overwrite=ow
+                    )
+            else:
+                with multiprocessing.Pool(max_workers) as pool:
+                    pool.starmap(self.write_processed_csv, iterator)
 
     @classmethod
     def set_regular_timestep(cls, data, year):
@@ -420,7 +426,6 @@ class MadisProcessor:
             QC-filtered dataframe.
         """
         if min_level == 0:
-            logger.warning('Skipping QC checks as min_level is 0.')
             return df
 
         var_names = [var_name for var_name in RAW_VARIABLES if var_name in df]
@@ -473,7 +478,6 @@ class MadisProcessor:
             Range-enforced dataframe.
         """
         if not do_qc:
-            logger.warning('Skipping range enforcement as do_qc is False.')
             return data
 
         features = [feat for feat in data.columns if feat in OUT_VARIABLES]

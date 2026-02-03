@@ -28,40 +28,44 @@ parser = argparse.ArgumentParser(prog='madis_downloader.py', description=desc)
 parser.add_argument(
     'region',
     type=str,
-    help="""Region to download data for. This selects the bounding box for the
-    download from the `DOMAINS` dictionary. The bounding box is only applied
-    following the download step, since the MADIS API does not support
-    filtering by region, so global data for the given time period will be
-    downloaded.""",
+    help="""Region to perform action (unpack, process) for. This
+    selects the bounding box from the `DOMAINS` dictionary. The bounding box
+    is only applied following the download step, since the MADIS API does
+    not support filtering by region, so global data for the given time period
+    will be downloaded.""",
 )
-parser.add_argument('start_year', type=int, help='First year to download.')
+parser.add_argument(
+    'start_year', type=int, help="""First year to perform action for."""
+)
 parser.add_argument(
     'end_year',
     type=int,
-    help="""Last year to download. All time steps between start_year (Jan 1st)
-    and end_year (Dec 31st) will be downloaded, inclusive.""",
+    help="""Last year to perform action for. All time steps between
+    start_year (Jan 1st) and end_year (Dec 31st) will be downloaded,
+    inclusive.""",
 )
 parser.add_argument(
-    'out_dir',
+    '-download_dir',
     type=str,
+    default=None,
     help="""Parent download directory. Raw downloads will be stored in
-    subdirectories of this directory, e.g., `out_dir/raw/<network>`""",
+    subdirectories of this directory, e.g., `download_dir/<network>`""",
 )
 parser.add_argument(
     '-unpack_dir',
     type=str,
     default=None,
     help="""Parent unpack directory. Unpacked files will be stored in
-    subdirectories of this directory, e.g., `unpack_dir/unpacked/<network>`.
-    If None this defaults to `out_dir/unpacked/<network>`."""
+    subdirectories of this directory, e.g., `unpack_dir/<network>`.
+    If None this defaults to `out_dir/unpacked/<network>`.""",
 )
 parser.add_argument(
     '-process_dir',
     type=str,
     default=None,
     help="""Parent process directory. Processed files will be stored in
-    subdirectories of this directory, e.g., `process_dir/processed/<network>`.
-    If None this defaults to `out_dir/processed/<network>`."""
+    subdirectories of this directory, e.g., `process_dir/<network>`.
+    If None this defaults to `out_dir/processed/<network>`.""",
 )
 parser.add_argument(
     '-nc_dir',
@@ -184,9 +188,12 @@ if __name__ == '__main__':
             end_date = f'{year}-12-31'
             for network in args.networks:
                 if args.download:
+                    assert args.download_dir is not None, (
+                        'download_dir must be specified when downloading data.'
+                    )
                     downloader = MadisDownloader(
                         network=network,
-                        download_dir=args.out_dir,
+                        out_dir=args.download_dir,
                         start_date=start_date,
                         end_date=end_date,
                     )
@@ -195,15 +202,23 @@ if __name__ == '__main__':
                     )
 
                 if args.unpack:
+                    check = (args.unpack_dir is not None) and (
+                        args.download_dir is not None
+                    )
+                    msg = (
+                        'unpack_dir and download_dir must be specified '
+                        'when unpacking data.'
+                    )
+                    assert check, msg
                     unpacker = MadisUnpacker(
                         network=network,
-                        download_dir=args.out_dir,
-                        unpack_dir=args.unpack_dir,
+                        in_dir=args.download_dir,
+                        out_dir=args.unpack_dir,
                         start_date=start_date,
                         end_date=end_date,
                     )
                     cfp = (
-                        f'{args.out_dir}/combined_{network}_{{year}}.nc'
+                        f'{args.unpack_dir}/combined_{network}_{{year}}.nc'
                         if args.use_cache
                         else None
                     )
@@ -215,11 +230,18 @@ if __name__ == '__main__':
                     )
 
                 if args.process:
+                    check = (args.unpack_dir is not None) and (
+                        args.process_dir is not None
+                    )
+                    msg = (
+                        'unpack_dir and process_dir must be specified when '
+                        'processing data.'
+                    )
+                    assert check, msg
                     processor = MadisProcessor(
                         network=network,
-                        download_dir=args.out_dir,
-                        unpack_dir=args.unpack_dir,
-                        process_dir=args.process_dir,
+                        in_dir=args.unpack_dir,
+                        out_dir=args.process_dir,
                         start_date=start_date,
                         end_date=end_date,
                         min_qc_level=args.min_qc_level,
@@ -230,11 +252,16 @@ if __name__ == '__main__':
                         bbox=DOMAINS[args.region]['area'],
                     )
 
-                proc_dir = f'{args.out_dir}/processed/{network}/{year}/'
+                check = (
+                    args.process_dir is not None and args.nc_dir is not None
+                )
+                assert check, (
+                    'nc_dir and process_dir must be specified when writing '
+                    'netcdf files.'
+                )
+                proc_dir = f'{args.process_dir}/{network}/{year}/'
                 proc_files = sorted(glob(f'{proc_dir}/{year}_*.csv'))
                 if args.write_nc and len(proc_files) > 0:
-                    if args.nc_dir is None:
-                        args.nc_dir = f'{args.out_dir}/{args.region}/final/'
                     write_nc(
                         year,
                         features=args.features,

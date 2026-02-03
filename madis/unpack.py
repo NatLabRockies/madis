@@ -1,4 +1,5 @@
-"""MADIS data unpacking functionality - convert raw netCDF files to CSV timeseries."""
+"""MADIS data unpacking functionality - convert raw netCDF files to CSV
+timeseries."""
 
 import logging
 import multiprocessing
@@ -9,6 +10,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from rex import init_logger
+from tqdm import tqdm
 
 from madis.common import get_dates
 from madis.constants import RAW_VARIABLES
@@ -23,8 +25,8 @@ class MadisUnpacker:
     def __init__(
         self,
         network,
-        download_dir,
-        unpack_dir=None,
+        in_dir,
+        out_dir,
         start_date=None,
         end_date=None,
     ):
@@ -34,38 +36,35 @@ class MadisUnpacker:
         ----------
         network : str
             The MADIS network.
-        download_dir : str
-            The directory containing raw downloaded data.
-        unpack_dir : str, optional
-            The directory to save unpacked CSV files. If None, uses download_dir.
+        in_dir : str
+            The parent directory containing raw downloaded data.
+        out_dir : str
+            The parent directory to save unpacked CSV files.
         start_date : str, optional
             Start date in 'YYYY-MM-DD' format.
         end_date : str, optional
             End date in 'YYYY-MM-DD' format.
         """
 
-        unpack_dir = unpack_dir or download_dir
         self.network = network
-        self.download_dir = f'{download_dir}/raw/{network}'
-        self.unpack_dir = f'{unpack_dir}/unpacked/{network}'
+        self.in_dir = f'{in_dir}/{network}'
+        self.out_dir = f'{out_dir}/{network}'
         self.start_date = start_date
         self.end_date = end_date
         self.dates = get_dates(start_date, end_date)
-        os.makedirs(self.unpack_dir, exist_ok=True)
+        os.makedirs(self.out_dir, exist_ok=True)
 
     def unpacked_files(self, year):
         """Get a list of unpacked files for the network."""
-        return sorted(glob(f'{self.unpack_dir}/{year}/*.csv', recursive=True))
+        return sorted(glob(f'{self.out_dir}/{year}/*.csv', recursive=True))
 
     def downloaded_files(self, year):
         """Get a list of downloaded files for the network."""
         return sorted(
-            glob(f'{self.download_dir}/{year}/**/*.gz', recursive=True)
+            glob(f'{self.in_dir}/{year}/**/*.gz', recursive=True)
         )
 
-    def run(
-        self, bbox, max_workers=32, cache_pattern=None, overwrite=False
-    ):
+    def run(self, bbox, max_workers=32, cache_pattern=None, overwrite=False):
         """Unpack the downloaded data into timeseries csv files.
 
         Parameters
@@ -95,10 +94,10 @@ class MadisUnpacker:
                     f'for year {year}.'
                 )
                 continue
-            os.makedirs(f'{self.unpack_dir}/{year}', exist_ok=True)
+            os.makedirs(f'{self.out_dir}/{year}', exist_ok=True)
             logger.info(
-                f'Unpacking {len(files)} files for {self.network} network for '
-                f'year {year}...'
+                f'Grouping coordinate data for {len(files)} files for '
+                f'{self.network} network for year {year}...'
             )
             cache_file = (
                 None if not cache_pattern else cache_pattern.format(year=year)
@@ -108,18 +107,21 @@ class MadisUnpacker:
             )
 
             out_files = [
-                f'{self.unpack_dir}/{year}/{year}_{key}.csv' for key in dfs
+                f'{self.out_dir}/{year}/{year}_{key}.csv' for key in dfs
             ]
             overwrites = [overwrite] * len(out_files)
             logger.info(
                 f'Writing unpacked data for {self.network} network for year '
                 f'{year} to {len(out_files)} files.'
             )
-            with multiprocessing.Pool(max_workers) as pool:
-                pool.starmap(
-                    self.write_unpacked_csv,
-                    zip(dfs.values(), out_files, overwrites),
-                )
+            iterator = zip(dfs.values(), out_files, overwrites)
+            if max_workers == 1:
+                for data, outfile, ow in tqdm(iterator, total=len(out_files)):
+                    self.write_unpacked_csv(data, outfile, overwrite=ow)
+            else:
+                with multiprocessing.Pool(max_workers) as pool:
+                    pool.starmap(self.write_unpacked_csv, iterator)
+
             self.write_unpacked_meta(year, bbox, dfs, overwrite=overwrite)
 
     def get_unpacked_meta_file(self, year, bbox):
@@ -139,7 +141,7 @@ class MadisUnpacker:
             Path to the meta file.
         """
         bbox_str = '_'.join([f'{b:.2f}' for b in bbox])
-        return f'{self.unpack_dir}/meta_{year}_{bbox_str}.csv'
+        return f'{self.out_dir}/meta_{year}_{bbox_str}.csv'
 
     def unpacked_files_exist(self, year, bbox):
         """Check if the unpacked meta exists for the given year and bbox.
@@ -162,7 +164,7 @@ class MadisUnpacker:
             return False
         meta_file = pd.read_csv(meta_file)
         out_files = [
-            f'{self.unpack_dir}/{year}/{year}_{key}.csv'
+            f'{self.out_dir}/{year}/{year}_{key}.csv'
             for key in meta_file['lat_lon_str']
         ]
         out = all(os.path.exists(file) for file in out_files)
@@ -223,14 +225,24 @@ class MadisUnpacker:
         if cache_file and os.path.exists(cache_file) and not overwrite:
             logger.info(f'Loading cached data from {cache_file}')
             return xr.open_dataset(cache_file).to_dataframe()
-        with multiprocessing.Pool(max_workers) as pool:
-            df_list = pool.map(cls._read_single_file, files)
+
+        if max_workers == 1:
+            df_list = []
+            for file in tqdm(files, total=len(files)):
+                df_list.append(cls._read_single_file(file))
+        else:
+            with multiprocessing.Pool(max_workers) as pool:
+                df_list = pool.map(cls._read_single_file, files)
+
         df_list = [df for df in df_list if df is not None]
+
         if not df_list:
             logger.error('No valid dataframes found in the files.')
             return pd.DataFrame()
+
         logger.info(f'Concatenating {len(df_list)} dataframes')
         df = pd.concat(df_list, axis=0)
+
         if cache_file and (not os.path.exists(cache_file) or overwrite):
             logger.info(f'Saving data to cache file {cache_file}')
             xr.Dataset.from_dataframe(df).to_netcdf(cache_file + '.tmp')
