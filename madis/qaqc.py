@@ -208,7 +208,7 @@ def filter_spike_groups(
 
     _preflight(da)
     bad_mask = da.copy().astype(bool)
-    bad_mask.name = 'bad_linear_gaps'
+    bad_mask.name = 'bad_spike_grpup'
     bad_mask[...] = False
     T = len(da['time'])
 
@@ -375,7 +375,7 @@ def filter_constant(da, value=None):
 
     _preflight(da)
     bad_mask = da.copy().astype(bool)
-    bad_mask.name = 'bad_value_range'
+    bad_mask.name = 'bad_constant'
     bad_mask[...] = False
 
     if value is None:
@@ -430,6 +430,78 @@ def run_filter_bank(da, config):
 
     return da, final_mask, filter_masks
 
+def filter_percentile(da, percentile=10, nstd=3, threshold=None):
+    """
+    Filter out an ENTIRE stations where a chosen percentile of observed values
+    is abnormally high, indicating systematic sensor issues or miscalibration.
+
+    This filter operates in two ways:
+    1. Calculates a threshold based on the distribution of the chosen
+    percentile across all stations in the network.
+    2. Uses a pre-defined threshold.
+
+    This filter was developed on Mesonet and METAR station data for wind speed
+    and has not yet been tested on other variables. Leave comments here when
+    other variables have been successfully filtered with this.
+
+    Example: For Mesonet network in 2024 in the greater COWY region with
+    percentile=10 and nstd=3, this generates a 10th percentile threshold of
+    4.2 m/s, which flags 17 out of 3415 stations.
+
+    Parameters
+    ----------
+    da : xr.DataArray
+        2D array with dims ("time", "space") for multiple observation
+        stations in a given region for a single variable
+    percentile : float, default=10
+        Percentile to calculate for each station (0-100). 
+        Use 10 for 10th percentile, 50 for median, etc.
+    nstd : float, default=3
+        Number of standard deviations above mean for threshold calculation.
+        Only used if threshold=None (network-based mode)
+    threshold : float, optional
+        Pre-defined percentile threshold. If provided, uses fixed threshold
+        instead of calculating from network statistics.
+    
+    Returns
+    -------
+    da : xr.DataArray
+        Same as input but with flagged stations set to NaN
+    bad_mask : xr.DataArray
+        Mask showing flagged stations (True for entire timeseries)
+
+    """
+
+    _preflight(da)
+    
+    if not 0 <= percentile <= 100:
+        raise ValueError(f"percentile must be between 0 and 100, got {percentile}")
+    
+    percentile_per_station = da.quantile(percentile / 100.0, dim='time')
+    
+    if threshold is None:
+        mean_p = percentile_per_station.mean().values
+        std_p = percentile_per_station.std().values
+        threshold = mean_p + nstd * std_p
+        mode_msg = f"network-based (mean={mean_p:.2f}, std={std_p:.2f}, nstd={nstd})"
+    else:
+        mode_msg = "fixed"
+    
+    flagged_stations = percentile_per_station > threshold
+    
+    bad_mask = da.copy().astype(bool)
+    bad_mask.name = f'bad_high_p{int(percentile)}_stations'
+    bad_mask[...] = False
+    bad_mask[:, flagged_stations] = True
+    
+    da[:, flagged_stations] = np.nan
+    
+    logger.info(
+        f"P{int(percentile)} filter ({mode_msg}): threshold={threshold:.2f}, "
+        f"flagged {flagged_stations.sum().values} stations"
+    )
+    
+    return da, bad_mask
 
 CONFIG_WS10M = {
     filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=3),
@@ -437,6 +509,7 @@ CONFIG_WS10M = {
                               down_thresh=20, nan_spikes=True),
     filter_value_range: dict(lower=0, upper=66),
     filter_constant: dict(value=None),
+    filter_percentile: dict(percentile=10, nstd=3, threshold=None),
 }
 """Config for run_filter_bank to clean 10-meter windspeed.
 Upper limit of based on regional maximum official wind gust of 66 m/s.
