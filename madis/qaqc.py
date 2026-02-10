@@ -421,16 +421,23 @@ def run_filter_bank(da, config):
 
     final_mask = False
     filter_masks = {}
+
     for fun, kwargs in config.items():
-        _, mask = fun(da.copy(), **kwargs)
-        filter_masks[fun] = mask
-        final_mask |= mask
+        if not isinstance(kwargs, list):
+            kwargs = [kwargs]
+
+        for kwarg in kwargs:
+            _, mask = fun(da.copy(), **kwarg)
+            if fun not in filter_masks:
+                filter_masks[fun] = []
+            filter_masks[fun].append(mask)
+            final_mask |= mask
 
     da = da.where(~final_mask, np.nan)
 
     return da, final_mask, filter_masks
 
-def filter_percentile(da, percentile=10, nstd=3, threshold=None, direction = 'greater'):
+def filter_percentile(da, percentile=None, nstd=None, threshold=None, direction = None):
     """
     Filter out an ENTIRE stations where a chosen percentile of observed values
     is abnormally high or low, indicating systematic sensor issues or
@@ -454,16 +461,16 @@ def filter_percentile(da, percentile=10, nstd=3, threshold=None, direction = 'gr
     da : xr.DataArray
         2D array with dims ("time", "space") for multiple observation
         stations in a given region for a single variable
-    percentile : float, default=10
+    percentile : float
         Percentile to calculate for each station (0-100). 
         Use 10 for 10th percentile, 50 for median, etc.
-    nstd : float, default=3
+    nstd : float
         Number of standard deviations above mean for threshold calculation.
         Only used if threshold=None (network-based mode)
     threshold : float, optional
         Pre-defined percentile threshold. If provided, uses fixed threshold
         instead of calculating from network statistics.
-    direction : str, default='greater'
+    direction : str
         Whether to flag stations with percentile "greater" or "less" than the
         threshold.
     
@@ -524,7 +531,8 @@ CONFIG_WS10M = {
                               down_thresh=20, nan_spikes=True),
     filter_value_range: dict(lower=0, upper=66),
     filter_constant: dict(value=None),
-    filter_percentile: dict(percentile=10, nstd=3, threshold=None, direction='greater'),
+    filter_percentile: [dict(percentile=10, nstd=3, threshold=None, direction='greater'),
+                        dict(percentile=95, threshold=1, direction='less')],
 }
 """Config for run_filter_bank to clean 10-meter windspeed.
 Upper limit of based on regional maximum official wind gust of 66 m/s.
