@@ -430,10 +430,11 @@ def run_filter_bank(da, config):
 
     return da, final_mask, filter_masks
 
-def filter_percentile(da, percentile=10, nstd=3, threshold=None):
+def filter_percentile(da, percentile=10, nstd=3, threshold=None, direction = 'greater'):
     """
     Filter out an ENTIRE stations where a chosen percentile of observed values
-    is abnormally high, indicating systematic sensor issues or miscalibration.
+    is abnormally high or low, indicating systematic sensor issues or
+    miscalibration.
 
     This filter operates in two ways:
     1. Calculates a threshold based on the distribution of the chosen
@@ -445,8 +446,8 @@ def filter_percentile(da, percentile=10, nstd=3, threshold=None):
     other variables have been successfully filtered with this.
 
     Example: For Mesonet network in 2024 in the greater COWY region with
-    percentile=10 and nstd=3, this generates a 10th percentile threshold of
-    4.2 m/s, which flags 17 out of 3415 stations.
+    percentile=10, nstd=3, direction = 'greater' generates a 10th percentile
+    threshold of 4.2 m/s, which flags 17 out of 3415 stations.
 
     Parameters
     ----------
@@ -462,6 +463,9 @@ def filter_percentile(da, percentile=10, nstd=3, threshold=None):
     threshold : float, optional
         Pre-defined percentile threshold. If provided, uses fixed threshold
         instead of calculating from network statistics.
+    direction : str, default='greater'
+        Whether to flag stations with percentile "greater" or "less" than the
+        threshold.
     
     Returns
     -------
@@ -476,18 +480,23 @@ def filter_percentile(da, percentile=10, nstd=3, threshold=None):
     
     if not 0 <= percentile <= 100:
         raise ValueError(f"percentile must be between 0 and 100, got {percentile}")
+    if direction not in ('greater', 'less'):
+        raise ValueError(f"direction must be 'greater' or 'less', got {direction}")
     
     percentile_per_station = da.quantile(percentile / 100.0, dim='time')
     
     if threshold is None:
         mean_p = percentile_per_station.mean().values
         std_p = percentile_per_station.std().values
-        threshold = mean_p + nstd * std_p
+        threshold = mean_p + nstd * std_p if direction == 'greater' else mean_p - nstd * std_p
         mode_msg = f"network-based (mean={mean_p:.2f}, std={std_p:.2f}, nstd={nstd})"
     else:
         mode_msg = "fixed"
     
-    flagged_stations = percentile_per_station > threshold
+    if direction == 'greater':
+        flagged_stations = percentile_per_station > threshold
+    else:
+        flagged_stations = percentile_per_station < threshold
     
     bad_mask = da.copy().astype(bool)
     bad_mask.name = f'bad_high_p{int(percentile)}_stations'
@@ -500,7 +509,13 @@ def filter_percentile(da, percentile=10, nstd=3, threshold=None):
         f"P{int(percentile)} filter ({mode_msg}): threshold={threshold:.2f}, "
         f"flagged {flagged_stations.sum().values} stations"
     )
-    
+    msg = (
+        f"P{int(percentile)} filter ({mode_msg}): threshold={threshold:.2f}, "
+        f"flagged {flagged_stations.sum().values} stations"
+    )
+    logger.info(msg)
+    print(msg)
+
     return da, bad_mask
 
 CONFIG_WS10M = {
@@ -509,7 +524,7 @@ CONFIG_WS10M = {
                               down_thresh=20, nan_spikes=True),
     filter_value_range: dict(lower=0, upper=66),
     filter_constant: dict(value=None),
-    filter_percentile: dict(percentile=10, nstd=3, threshold=None),
+    filter_percentile: dict(percentile=10, nstd=3, threshold=None, direction='greater'),
 }
 """Config for run_filter_bank to clean 10-meter windspeed.
 Upper limit of based on regional maximum official wind gust of 66 m/s.
