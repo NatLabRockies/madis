@@ -252,24 +252,27 @@ if __name__ == '__main__':
                         bbox=DOMAINS[args.region]['area'],
                     )
 
-                check = (
-                    args.process_dir is not None and args.nc_dir is not None
-                )
-                assert check, (
-                    'nc_dir and process_dir must be specified when writing '
-                    'netcdf files.'
-                )
-                proc_dir = f'{args.process_dir}/{network}/{year}/'
-                proc_files = sorted(glob(f'{proc_dir}/{year}_*.csv'))
-                if args.write_nc and len(proc_files) > 0:
-                    write_nc(
-                        year,
-                        features=args.features,
-                        files=proc_files,
-                        out_dir=args.nc_dir,
-                        bbox=DOMAINS[args.region]['area'],
-                        overwrite=args.overwrite,
-                        max_workers=args.max_workers,
-                        network=network,
-                        nan_cap=args.nan_cap,
+                if args.write_nc:
+                    check = (
+                        args.process_dir is not None
+                        and args.nc_dir is not None
                     )
+                    msg = (
+                        'nc_dir and process_dir must be specified when '
+                        'writing netcdf files.'
+                    )
+                    assert check, msg
+                    proc_dir = f'{args.process_dir}/{network}/{year}/'
+                    proc_files = sorted(glob(f'{proc_dir}/{year}_*.csv'))
+                    if len(proc_files) > 0:
+                        write_nc(
+                            year,
+                            features=args.features,
+                            files=proc_files,
+                            out_dir=args.nc_dir,
+                            bbox=DOMAINS[args.region]['area'],
+                            overwrite=args.overwrite,
+                            max_workers=args.max_workers,
+                            network=network,
+                            nan_cap=args.nan_cap,
+                        )
