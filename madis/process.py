@@ -677,7 +677,15 @@ def _write_nc(
             'source': BASEURL,
         },
     )
-    encoding = {feature: {'chunksizes': (2000, 500)}}
+    dim_sizes = list(ds.dims.values())
+    encoding = {
+        feature: {
+            'chunksizes': (
+                np.min((2000, dim_sizes[0])),
+                np.min((500, dim_sizes[1])),
+            )
+        }
+    }
     logger.info(f'Writing {feature} to netcdf file {out_file}.')
     ds.to_netcdf(out_file + '.tmp', encoding=encoding)
     os.replace(out_file + '.tmp', out_file)
