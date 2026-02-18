@@ -59,9 +59,7 @@ class MadisUnpacker:
 
     def downloaded_files(self, year):
         """Get a list of downloaded files for the network."""
-        return sorted(
-            glob(f'{self.in_dir}/{year}/**/*.gz', recursive=True)
-        )
+        return sorted(glob(f'{self.in_dir}/{year}/**/*.gz', recursive=True))
 
     def run(self, bbox, max_workers=32, cache_pattern=None, overwrite=False):
         """Unpack the downloaded data into timeseries csv files.
@@ -418,7 +416,7 @@ class MadisUnpacker:
         df = df.rename({time_key: 'time'}, axis=1, errors='ignore')
         df = df.drop_duplicates()
         logger.info('Grouping time steps by coordinate')
-        dfs = {k: v for k, v in df.groupby('lat_lon_str')}
+        dfs = {k: v for k, v in df.groupby('lat_lon_str')}  # noqa: C416
         return dfs
 
     @classmethod
