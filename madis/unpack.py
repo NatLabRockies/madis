@@ -6,7 +6,6 @@ import multiprocessing
 import os
 from glob import glob
 
-import numpy as np
 import pandas as pd
 import xarray as xr
 from rex import init_logger
