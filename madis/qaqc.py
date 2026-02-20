@@ -168,7 +168,7 @@ def filter_spike_groups(
     up_thresh=20,
     down_thresh=20,
     nan_spikes=True,
-):
+    ):
     """Some MADIS timeseries data appears to have extreme spikes with multiple
     consecutive extreme values. This function identifies spikes that are
     dramatic (large 1st derivative) and have N consecutive values over a
@@ -302,6 +302,10 @@ def filter_seasonal_anomalies(da, nstd=4):
 
         bad_mask[:, idx] = mask
         da[:, idx] = df[idx].values
+    n_removed = bad_mask.sum().values
+    n_total = bad_mask.size
+    print(f"Seasonal anomaly filter (nstd={nstd}): removed {n_removed} values out of {n_total} ({100 * n_removed / n_total:.2f}%)")
+
 
     return da, bad_mask
 
@@ -390,53 +394,6 @@ def filter_constant(da, value=None):
 
     return da, bad_mask
 
-
-def run_filter_bank(da, config):
-    """Run a set of filters on a collection of observation stations in a
-    single region for a single variable. The filter banks are combined such
-    that each filter is run on the raw input data separately and then
-    observations that fail ANY of the filters is set to NaN
-
-    Parameters
-    ----------
-    da : xr.DataArray
-        2D array with coordinates ("time", "space") for multiple observation
-        stations in a given region for a single variable
-    config : dict
-        Dictionary of format {filter_function: {kwarg: value}} such that all of
-        the requested "filter_function(s)" will be run on ``da`` and
-        kwarg/value will be passed in as arguments to the function
-
-    Returns
-    -------
-    da : xr.DataArray
-        Same as input but cleaned!
-    final_mask : xr.DataArray
-        Mask showing which values are bad (True where bad) in ANY of the
-        filters that were run. Same dimensionality as da.
-    filter_masks : dict
-        Dictionary with the same keys as config and values as the masks output
-        by each respective filter
-    """
-
-    final_mask = False
-    filter_masks = {}
-
-    for fun, kwargs in config.items():
-        if not isinstance(kwargs, list):
-            kwargs = [kwargs]
-
-        for kwarg in kwargs:
-            _, mask = fun(da.copy(), **kwarg)
-            if fun not in filter_masks:
-                filter_masks[fun] = []
-            filter_masks[fun].append(mask)
-            final_mask |= mask
-
-    da = da.where(~final_mask, np.nan)
-
-    return da, final_mask, filter_masks
-
 def filter_percentile(da, percentile=None, nstd=None, threshold=None, direction = None):
     """
     Filter out an ENTIRE stations where a chosen percentile of observed values
@@ -473,7 +430,6 @@ def filter_percentile(da, percentile=None, nstd=None, threshold=None, direction 
     direction : str
         Whether to flag stations with percentile "greater" or "less" than the
         threshold.
-    
     Returns
     -------
     da : xr.DataArray
@@ -524,6 +480,98 @@ def filter_percentile(da, percentile=None, nstd=None, threshold=None, direction 
     print(msg)
 
     return da, bad_mask
+
+def filter_completeness (da, completeness = 75, window = 48):
+    """
+    Filter out time periods within individual stations where the percentage of
+    NA values within a rolling window exceeds a specified completeness threshold.
+    This is designed to catch sensors that are temporarily offline or have
+    communication issues, resulting in many missing values for a period of time.
+    Parameters
+    ----------
+    da : xr.DataArray
+        The input data array containing observation variables with dimensions ("time", "space").
+    completeness : float
+        The minimum percentage of non-NA values required within the rolling window
+        for the data to be considered valid. For example, completeness=50 means
+        at least 50% of the values in the window must be non-NA.
+    window : int
+        The size of the rolling window in number of observations. For hourly data,
+        a window of 24 would correspond to a 24-hour period.
+    Returns
+    -------
+    da : xr.DataArray
+        Same as input but with flagged segments set to NaN
+    bad_mask : xr.DataArray
+        Mask showing which values are bad (True where bad).
+        Same dimensionality as da.
+    """
+
+    _preflight(da)
+
+    if not (0 <= completeness <= 100):
+        raise ValueError("completeness must be between 0 and 100")
+    
+    bad_mask = da.copy().astype(bool)
+    bad_mask.name = 'bad_completeness'
+
+    min_non_na = completeness / 100 * window
+    
+    for idx in da['space']:
+        ida = da[:, idx]
+        rolling_non_na = ida.notnull().rolling(time=window, center=True).sum()
+        ibad_mask = (rolling_non_na < min_non_na).values
+        ida[ibad_mask] = np.nan
+        da[:, idx] = ida
+        bad_mask[:, idx] = ibad_mask
+
+    return da, bad_mask
+
+def run_filter_bank(da, config):
+    """Run a set of filters on a collection of observation stations in a
+    single region for a single variable. The filter banks are combined such
+    that each filter is run on the raw input data separately and then
+    observations that fail ANY of the filters is set to NaN
+
+    Parameters
+    ----------
+    da : xr.DataArray
+        2D array with coordinates ("time", "space") for multiple observation
+        stations in a given region for a single variable
+    config : dict
+        Dictionary of format {filter_function: {kwarg: value}} such that all of
+        the requested "filter_function(s)" will be run on ``da`` and
+        kwarg/value will be passed in as arguments to the function
+
+    Returns
+    -------
+    da : xr.DataArray
+        Same as input but cleaned!
+    final_mask : xr.DataArray
+        Mask showing which values are bad (True where bad) in ANY of the
+        filters that were run. Same dimensionality as da.
+    filter_masks : dict
+        Dictionary with the same keys as config and values as the masks output
+        by each respective filter
+    """
+
+    final_mask = False
+    filter_masks = {}
+
+    for fun, kwargs in config.items():
+        if not isinstance(kwargs, list):
+            kwargs = [kwargs]
+
+        for kwarg in kwargs:
+            _, mask = fun(da.copy(), **kwarg)
+            if fun not in filter_masks:
+                filter_masks[fun] = []
+            filter_masks[fun].append(mask)
+            final_mask |= mask
+
+    da = da.where(~final_mask, np.nan)
+
+    return da, final_mask, filter_masks
 
 CONFIG_WS10M = {
     filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=3),
@@ -579,3 +627,7 @@ CONFIG_RH2M = {
 }
 """Config for ``run_filter_bank`` to clean near-surface 2-meter relative
 humidity"""
+
+CONFIG_PRECIP1H = {
+        filter_value_range: dict(lower=0, upper=.5) }
+"""Config for ``run_filter_bank`` to clean near-surface 1-hour precipitation"""
