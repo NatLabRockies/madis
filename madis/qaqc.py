@@ -541,7 +541,9 @@ def run_filter_bank(da, config):
     config : dict
         Dictionary of format {filter_function: {kwarg: value}} such that all of
         the requested "filter_function(s)" will be run on ``da`` and
-        kwarg/value will be passed in as arguments to the function
+        kwarg/value will be passed in as arguments to the function. If a 
+        ``'post'`` key is included in the config, those filters will be run on
+        cleaned data after the initial filters have been applied. 
 
     Returns
     -------
@@ -554,11 +556,15 @@ def run_filter_bank(da, config):
         Dictionary with the same keys as config and values as the masks output
         by each respective filter
     """
+    
+    post_config = config.get('post', {})
 
     final_mask = False
     filter_masks = {}
 
     for fun, kwargs in config.items():
+        if fun == 'post':
+            continue
         if not isinstance(kwargs, list):
             kwargs = [kwargs]
 
@@ -571,6 +577,16 @@ def run_filter_bank(da, config):
 
     da = da.where(~final_mask, np.nan)
 
+    for fun, kwargs in post_config.items():
+        if not isinstance(kwargs, list):
+            kwargs = [kwargs]
+        for kwarg in kwargs:
+            da, mask = fun(da, **kwarg)
+            if fun not in filter_masks:
+                filter_masks[fun] = []
+            filter_masks[fun].append(mask)
+            final_mask |= mask
+
     return da, final_mask, filter_masks
 
 CONFIG_WS10M = {
@@ -581,7 +597,9 @@ CONFIG_WS10M = {
     filter_constant: dict(value=None),
     filter_percentile: [dict(percentile=10, nstd=3, threshold=None, direction='greater'),
                         dict(percentile=95, threshold=1, direction='less')],
+    'post': {filter_completeness: dict(completeness=75, window=48),}
 }
+
 """Config for run_filter_bank to clean 10-meter windspeed.
 Upper limit of based on regional maximum official wind gust of 66 m/s.
 Ex-percentile of 1 to retain extreme windspeed events."""
