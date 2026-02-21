@@ -481,7 +481,7 @@ def filter_percentile(da, percentile=None, nstd=None, threshold=None, direction 
 
     return da, bad_mask
 
-def filter_completeness (da, completeness = 75, window = 48):
+def filter_completeness (da, completeness = 90, window = 24, station_frac=None):
     """
     Filter out time periods within individual stations where the percentage of
     NA values within a rolling window exceeds a specified completeness threshold.
@@ -498,6 +498,10 @@ def filter_completeness (da, completeness = 75, window = 48):
     window : int
         The size of the rolling window in number of observations. For hourly data,
         a window of 24 would correspond to a 24-hour period.
+    station_frac : float, optional
+        The minimum fraction of flagged values required to flag an entire station.
+        If None, this feature is disabled.
+
     Returns
     -------
     da : xr.DataArray
@@ -524,6 +528,14 @@ def filter_completeness (da, completeness = 75, window = 48):
         ida[ibad_mask] = np.nan
         da[:, idx] = ida
         bad_mask[:, idx] = ibad_mask
+
+    if station_frac is not None:
+        frac_flagged = bad_mask.mean(dim='time')
+        bad_stations = (frac_flagged > station_frac).values  # .values here
+        da[:, bad_stations] = np.nan
+        bad_mask[:, bad_stations] = True
+        n_flagged = int(bad_stations.sum())
+        print(f"Station completeness filter (station_frac={station_frac}): flagged {n_flagged} stations entirely")
 
     return da, bad_mask
 
@@ -597,7 +609,7 @@ CONFIG_WS10M = {
     filter_constant: dict(value=None),
     filter_percentile: [dict(percentile=10, nstd=3, threshold=None, direction='greater'),
                         dict(percentile=95, threshold=1, direction='less')],
-    'post': {filter_completeness: dict(completeness=75, window=48),}
+    'post': {filter_completeness: dict(completeness=90, window=24, station_frac=0.5),}
 }
 
 """Config for run_filter_bank to clean 10-meter windspeed.
@@ -608,6 +620,7 @@ CONFIG_WDIR10M = {
     filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=3),
     filter_value_range: dict(lower=0, upper=360),
     filter_constant: dict(value=None),
+    'post': {filter_completeness: dict(completeness=90, window=24, station_frac=0.5),}
 }
 """Config for run_filter_bank to clean 10-meter wind direction."""
 
@@ -616,6 +629,7 @@ CONFIG_GUST10M = {
     filter_spikes: dict(diff_threshold=20, ex_percentile=1),
     filter_value_range: dict(lower=0, upper=66),
     filter_constant: dict(value=None),
+    'post': {filter_completeness: dict(completeness=90, window=24, station_frac=0.5),}
 }
 """Config for run_filter_bank to clean 10-meter wind gusts.
 Upper limit of based on regional maximum official wind gust of 66 m/s.
@@ -625,6 +639,7 @@ CONFIG_P0M = {
     filter_seasonal_anomalies: dict(nstd=4),
     filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=3),
     filter_constant: dict(value=None),
+    'post': {filter_completeness: dict(completeness=90, window=24, station_frac=0.5),}
 }
 """Config for ``run_filter_bank`` to clean near-surface pressure"""
 
@@ -633,6 +648,7 @@ CONFIG_T2M = {
     filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=3),
     filter_spikes: dict(diff_threshold=15, ex_percentile=2),
     filter_constant: dict(value=None),
+    'post': {filter_completeness: dict(completeness=90, window=24, station_frac=0.5),}
 }
 """Config for ``run_filter_bank`` to clean near-surface 2-meter temperature"""
 
@@ -642,6 +658,7 @@ CONFIG_RH2M = {
     filter_spikes: dict(diff_threshold=15, ex_percentile=2),
     filter_value_range: dict(lower=0, upper=100),
     filter_constant: dict(value=None),
+    'post': {filter_completeness: dict(completeness=90, window=24, station_frac=0.5),}
 }
 """Config for ``run_filter_bank`` to clean near-surface 2-meter relative
 humidity"""
