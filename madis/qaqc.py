@@ -5,6 +5,7 @@ import logging
 import numpy as np
 import pandas as pd
 import xarray as xr
+import ruptures as rpt
 from warnings import warn
 
 logger = logging.getLogger(__name__)
@@ -539,6 +540,134 @@ def filter_completeness (da, completeness = 90, window = 24, station_frac=None):
 
     return da, bad_mask
 
+# todo: remove print statements form filter_changpoint in the future
+def filter_changepoint(da, percentile=10, threshold=None, nstd=None, 
+                       direction='greater', pen=250, model = 'l2', jump=20, min_size=48):
+    """
+    Filter out time periods within individual stations where a chosen percentile
+    of observed values within a change point segment is abnormally high or low,
+    indicating a temporarily blown or miscalibrated sensor.
+    Uses change point detection (ruptures library) to identify segments
+    within each station's time series, then flags segments where the chosen
+    percentile exceeds a threshold. This is designed to catch sensors that are
+    only bad for a portion of the year, complementing filter_percentile which
+    flags stations that are bad for the entire record.
+    This filter should be run AFTER other filters (e.g. filter_linear_gaps,
+    filter_spike_groups) so that artifacts do not create change points.
+    
+    Parameters
+    ----------
+    da : xr.DataArray
+        2D array with dims ("time", "space") for multiple observation
+        stations in a given region for a single variable
+    percentile : float
+        Percentile to calculate for each segment (0-100).
+        Use 10 for 10th percentile, 50 for median, etc.
+    threshold : float, optional
+        Pre-defined percentile threshold. If provided, uses fixed threshold
+        instead of calculating from network statistics.
+    nstd : float, optional
+        Number of standard deviations from mean for network-based threshold.
+        Only used if threshold=None.
+    direction : str
+        Whether to flag segments with percentile "greater" or "less" than
+        the threshold.
+    pen : float
+        Penalty parameter. Higher values detect only larger shifts.
+        This changes and requires tuning depending on the model coost function.
+    jump : int
+        Jump parameter. Only every nth index is considered as a candidate
+        change point. Higher values are faster but less precise in location.
+    min_size : int
+        Minimum number of observations per segment. Prevents change points
+        from being placed too close together. With hourly data, min_size=48
+        means no segment shorter than 48 hours.
+    Returns
+    -------
+    da : xr.DataArray
+        Same as input but with flagged segments set to NaN
+    bad_mask : xr.DataArray
+        Mask showing which values are bad (True where bad).
+        Same dimensionality as da.
+    """
+    da = da.compute()
+    _preflight(da)
+    if not 0 <= percentile <= 100:
+        raise ValueError(f"percentile must be between 0 and 100, got {percentile}")
+    if direction not in ('greater', 'less'):
+        raise ValueError(f"direction must be 'greater' or 'less', got {direction}")
+    if threshold is None and nstd is None:
+        raise ValueError("Must provide either threshold or nstd")
+    bad_mask = da.copy().astype(bool)
+    bad_mask.name = f'bad_changepoint_p{int(percentile)}'
+    bad_mask[...] = False
+
+    if threshold is None:
+        percentile_per_station = da.quantile(percentile / 100.0, dim='time')
+        mean_p = float(percentile_per_station.mean().values)
+        std_p = float(percentile_per_station.std().values)
+        threshold = (mean_p + nstd * std_p if direction == 'greater' 
+                     else mean_p - nstd * std_p)
+        mode_msg = f"network-based (mean={mean_p:.2f}, std={std_p:.2f}, nstd={nstd})"
+    else:
+        mode_msg = "fixed"
+    n_stations_flagged = 0
+    n_obs_flagged = 0
+    n_stations_skipped = 0
+    for idx in da['space']:
+        print(idx.values)
+        ida = da.sel(space=idx)
+        # Skip stations that are already fully NaN 
+        if ida.isnull().all():
+            n_stations_skipped += 1
+            continue
+        # Extract valid values and their timestamps
+        valid_mask = ~np.isnan(ida.values)
+        valid_values = ida.values[valid_mask]
+        valid_times = da['time'].values[valid_mask]
+        # Skip stations too short to segment
+        if len(valid_values) < min_size * 2:
+            n_stations_skipped += 1
+            continue
+        # Run change point detection 
+        signal = valid_values.reshape(-1, 1)
+        try:
+            algo = rpt.Pelt(model=model, jump=jump, min_size=min_size).fit(signal)
+            result = algo.predict(pen=pen)
+        except Exception as e:
+            logger.warning(f"Ruptures failed for station {idx.values}: {e}")
+            n_stations_skipped += 1
+            continue
+        # Evaluate each segment
+        segment_boundaries = [0] + result
+        station_flagged = False
+        for start, end in zip(segment_boundaries[:-1], segment_boundaries[1:]):
+            segment_values = valid_values[start:end]
+            segment_times = valid_times[start:end]
+            seg_percentile = np.percentile(segment_values, percentile)
+            if direction == 'greater' and seg_percentile > threshold:
+                bad_mask.loc[dict(time=segment_times, space=idx)] = True
+                n_obs_flagged += len(segment_times)
+                station_flagged = True
+            elif direction == 'less' and seg_percentile < threshold:
+                bad_mask.loc[dict(time=segment_times, space=idx)] = True
+                n_obs_flagged += len(segment_times)
+                station_flagged = True
+        if station_flagged:
+            n_stations_flagged += 1
+    # Apply mask to data 
+    da = da.where(~bad_mask, np.nan)
+    msg = (
+        f"Change point filter (P{int(percentile)}, {mode_msg}): "
+        f"threshold={threshold:.2f}, pen={pen}, jump={jump}, min_size={min_size}, "
+        f"flagged {n_stations_flagged} stations ({n_obs_flagged} obs), "
+        f"skipped {n_stations_skipped} stations"
+    )
+    logger.info(msg)
+    print(msg)
+    return da, bad_mask
+
+
 def run_filter_bank(da, config):
     """Run a set of filters on a collection of observation stations in a
     single region for a single variable. The filter banks are combined such
@@ -602,14 +731,13 @@ def run_filter_bank(da, config):
     return da, final_mask, filter_masks
 
 CONFIG_WS10M = {
-    filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=3),
     filter_spike_groups: dict(N=3, value_thresh=20, up_thresh=20,
                               down_thresh=20, nan_spikes=True),
     filter_value_range: dict(lower=0, upper=66),
     filter_constant: dict(value=None),
     filter_percentile: [dict(percentile=10, nstd=3, threshold=None, direction='greater'),
                         dict(percentile=95, threshold=1, direction='less')],
-    'post': {filter_completeness: dict(completeness=90, window=24, station_frac=0.5),}
+    'post': {filter_completeness: dict(completeness=80, window=24, station_frac=0.5),}
 }
 
 """Config for run_filter_bank to clean 10-meter windspeed.
@@ -617,48 +745,41 @@ Upper limit of based on regional maximum official wind gust of 66 m/s.
 Ex-percentile of 1 to retain extreme windspeed events."""
 
 CONFIG_WDIR10M = {
-    filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=3),
     filter_value_range: dict(lower=0, upper=360),
     filter_constant: dict(value=None),
-    'post': {filter_completeness: dict(completeness=90, window=24, station_frac=0.5),}
+    'post': {filter_completeness: dict(completeness=80, window=24, station_frac=0.5),}
 }
 """Config for run_filter_bank to clean 10-meter wind direction."""
 
 CONFIG_GUST10M = {
-    filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=3),
     filter_spikes: dict(diff_threshold=20, ex_percentile=1),
     filter_value_range: dict(lower=0, upper=66),
     filter_constant: dict(value=None),
-    'post': {filter_completeness: dict(completeness=90, window=24, station_frac=0.5),}
+    'post': {filter_completeness: dict(completeness=80, window=24, station_frac=0.5),}
 }
 """Config for run_filter_bank to clean 10-meter wind gusts.
 Upper limit of based on regional maximum official wind gust of 66 m/s.
 Ex-percentile of 1 to retain extreme windspeed events."""
 
 CONFIG_P0M = {
-    filter_seasonal_anomalies: dict(nstd=4),
-    filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=3),
     filter_constant: dict(value=None),
-    'post': {filter_completeness: dict(completeness=90, window=24, station_frac=0.5),}
+    'post': {filter_completeness: dict(completeness=80, window=24, station_frac=0.5),}
 }
 """Config for ``run_filter_bank`` to clean near-surface pressure"""
 
 CONFIG_T2M = {
-    filter_seasonal_anomalies: dict(nstd=4),
-    filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=3),
     filter_spikes: dict(diff_threshold=15, ex_percentile=2),
     filter_constant: dict(value=None),
-    'post': {filter_completeness: dict(completeness=90, window=24, station_frac=0.5),}
+    filter_value_range: dict(lower=-60, upper=60),
+    'post': {filter_completeness: dict(completeness=80, window=24, station_frac=0.5),}
 }
 """Config for ``run_filter_bank`` to clean near-surface 2-meter temperature"""
 
 CONFIG_RH2M = {
-    filter_seasonal_anomalies: dict(nstd=4),
-    filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=3),
     filter_spikes: dict(diff_threshold=15, ex_percentile=2),
     filter_value_range: dict(lower=0, upper=100),
     filter_constant: dict(value=None),
-    'post': {filter_completeness: dict(completeness=90, window=24, station_frac=0.5),}
+    'post': {filter_completeness: dict(completeness=80, window=24, station_frac=0.5),}
 }
 """Config for ``run_filter_bank`` to clean near-surface 2-meter relative
 humidity"""
