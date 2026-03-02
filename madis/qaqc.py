@@ -524,10 +524,10 @@ def filter_completeness (da, completeness = 90, window = 24, station_frac=None):
     
     for idx in da['space']:
         ida = da[:, idx]
-        rolling_non_na = ida.notnull().rolling(time=window, center=True).sum()
+        rolling_non_na = ida.notnull().rolling(time=window, center=True, min_periods = window).sum()
         ibad_mask = (rolling_non_na < min_non_na).values
-        ida[ibad_mask] = np.nan
-        da[:, idx] = ida
+        # ida[ibad_mask] = np.nan
+        # da[:, idx] = ida
         bad_mask[:, idx] = ibad_mask
 
     if station_frac is not None:
@@ -537,6 +537,8 @@ def filter_completeness (da, completeness = 90, window = 24, station_frac=None):
         bad_mask[:, bad_stations] = True
         n_flagged = int(bad_stations.sum())
         print(f"Station completeness filter (station_frac={station_frac}): flagged {n_flagged} stations entirely")
+
+    da = da.where(~bad_mask)
 
     return da, bad_mask
 
@@ -667,6 +669,41 @@ def filter_changepoint(da, percentile=10, threshold=None, nstd=None,
     print(msg)
     return da, bad_mask
 
+def filter_run_on_other_da(da, *, run_on_da, base_filter, base_filter_kwargs=None):
+    """
+    Generic adapter:
+      - compute mask by running base_filter on run_on_da
+      - return mask to be applied to da by run_filter_bank
+    
+    Parameters
+    ----------
+    da: xr.DataArray
+        The data array to be filtered (but not used for mask calculation)
+    run_on_da: xr.DataArray
+        The data array to run the base_filter on to compute the mask.
+    base_filter: function
+        A filter function that takes an xr.DataArray and returns (filtered_da, mask)
+    base_filter_kwargs: dict, optional
+        Keyword arguments to pass to the base_filter function
+    
+    Returns
+    -------
+    da: xr.DataArray
+        The input data array (unmodified)
+    mask: xr.DataArray
+        The mask computed by running base_filter on run_on_da, to be applied
+        to da.
+
+    """
+    _preflight(da)
+    _preflight(run_on_da)
+
+    if base_filter_kwargs is None:
+        base_filter_kwargs = {}
+
+    _, mask = base_filter(run_on_da.copy(), **base_filter_kwargs)
+
+    return da, mask
 
 def run_filter_bank(da, config):
     """Run a set of filters on a collection of observation stations in a
@@ -737,7 +774,8 @@ CONFIG_WS10M = {
     filter_constant: dict(value=None),
     filter_percentile: [dict(percentile=10, nstd=3, threshold=None, direction='greater'),
                         dict(percentile=95, threshold=1, direction='less')],
-    'post': {filter_completeness: dict(completeness=80, window=24, station_frac=0.5),}
+    filter_run_on_other_da: dict(run_on_da='abs_diff_windspeed_10m', base_filter=filter_changepoint, base_filter_kwargs=dict(percentile=10, nstd=3, direction='greater', pen=350, jump=20, min_size=168)),
+    'post': {filter_completeness: dict(completeness=80, window=24, station_frac=None),}
 }
 
 """Config for run_filter_bank to clean 10-meter windspeed.
@@ -747,7 +785,7 @@ Ex-percentile of 1 to retain extreme windspeed events."""
 CONFIG_WDIR10M = {
     filter_value_range: dict(lower=0, upper=360),
     filter_constant: dict(value=None),
-    'post': {filter_completeness: dict(completeness=80, window=24, station_frac=0.5),}
+    'post': {filter_completeness: dict(completeness=80, window=24, station_frac=None),}
 }
 """Config for run_filter_bank to clean 10-meter wind direction."""
 
@@ -771,7 +809,8 @@ CONFIG_T2M = {
     filter_spikes: dict(diff_threshold=15, ex_percentile=2),
     filter_constant: dict(value=None),
     filter_value_range: dict(lower=-60, upper=60),
-    'post': {filter_completeness: dict(completeness=80, window=24, station_frac=0.5),}
+    filter_run_on_other_da: dict(run_on_da='abs_diff_temperature_2m', base_filter=filter_changepoint, base_filter_kwargs=dict(percentile=10, nstd=3, direction='greater', pen=350, jump=20, min_size=168)),
+    'post': {filter_completeness: dict(completeness=80, window=24, station_frac=None),}
 }
 """Config for ``run_filter_bank`` to clean near-surface 2-meter temperature"""
 
@@ -779,7 +818,7 @@ CONFIG_RH2M = {
     filter_spikes: dict(diff_threshold=15, ex_percentile=2),
     filter_value_range: dict(lower=0, upper=100),
     filter_constant: dict(value=None),
-    'post': {filter_completeness: dict(completeness=80, window=24, station_frac=0.5),}
+    'post': {filter_completeness: dict(completeness=80, window=24, station_frac=None),}
 }
 """Config for ``run_filter_bank`` to clean near-surface 2-meter relative
 humidity"""
