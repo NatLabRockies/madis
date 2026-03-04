@@ -345,13 +345,11 @@ def filter_value_range(da, lower=None, upper=None):
     bad_mask[...] = False
 
     if lower is not None:
-        too_low = da < lower
-        da = xr.where(too_low, np.nan, da)
-        bad_mask = xr.where(too_low, True, bad_mask)
+        bad_mask = bad_mask | (da < lower)
     if upper is not None:
-        too_high = da > upper
-        da = xr.where(too_high, np.nan, da)
-        bad_mask = xr.where(too_high, True, bad_mask)
+        bad_mask = bad_mask | (da > upper)
+
+    da = da.where(~bad_mask)
 
     return da, bad_mask
 
@@ -431,14 +429,16 @@ def filter_percentile(da, percentile=None, nstd=None, threshold=None, direction 
     direction : str
         Whether to flag stations with percentile "greater" or "less" than the
         threshold.
+
     Returns
     -------
     da : xr.DataArray
-        Same as input but with flagged stations set to NaN
+        Same as input but cleaned!
     bad_mask : xr.DataArray
-        Mask showing flagged stations (True for entire timeseries)
-
+        Mask showing which values are bad (True where bad).
+        Same dimensionality as da.
     """
+
 
     _preflight(da)
     
@@ -482,7 +482,45 @@ def filter_percentile(da, percentile=None, nstd=None, threshold=None, direction 
 
     return da, bad_mask
 
-def filter_completeness (da, completeness = 90, window = 24, station_frac=None):
+def filter_mean(da, threshold, direction='greater'):
+    """Filter out an ENTIRE stations where the mean of a variable across time
+     is greater than a chosen threshold. This is designed to be applied to the
+     error between MADIS observations and a reference dataset (e.g. HRRR f02)
+     to catach stations with persisten sensor bias. 
+
+    da : xr.DataArray
+        2D array with coordinates ("time", "space") for multiple observation
+        stations in a given region for a single variable
+    threshold : float
+        The mean value threshold used to flag stations.
+    direction : str
+        Whether to flag segments with percentile "greater" or "less" than
+        the threshold.
+
+    Returns
+    -------
+    da : xr.DataArray
+        Same as input but cleaned!
+    bad_mask : xr.DataArray
+        Mask showing which values are bad (True where bad).
+        Same dimensionality as da.
+    """
+
+    _preflight(da)
+    if direction not in ('greater', 'less'):
+        raise ValueError(f"direction must be 'greater' or 'less', got {direction}")
+
+    mean_per_station = da.mean(dim='time', skipna=True)
+    flagged = mean_per_station > threshold if direction == 'greater' else mean_per_station < threshold
+
+    bad_mask = xr.zeros_like(da, dtype=bool)
+    bad_mask.name = 'bad_mean_stations'
+    bad_mask[:, flagged] = True
+    da[:, flagged] = np.nan
+
+    return da, bad_mask
+
+def filter_completeness (da, completeness = 80, window = 24, station_frac=None):
     """
     Filter out time periods within individual stations where the percentage of
     NA values within a rolling window exceeds a specified completeness threshold.
@@ -506,7 +544,7 @@ def filter_completeness (da, completeness = 90, window = 24, station_frac=None):
     Returns
     -------
     da : xr.DataArray
-        Same as input but with flagged segments set to NaN
+        Same as input but cleaned!
     bad_mask : xr.DataArray
         Mask showing which values are bad (True where bad).
         Same dimensionality as da.
@@ -519,32 +557,30 @@ def filter_completeness (da, completeness = 90, window = 24, station_frac=None):
     
     bad_mask = da.copy().astype(bool)
     bad_mask.name = 'bad_completeness'
+    bad_mask[...] = False
 
     min_non_na = completeness / 100 * window
     
     for idx in da['space']:
         ida = da[:, idx]
-        rolling_non_na = ida.notnull().rolling(time=window, center=True, min_periods = window).sum()
+        rolling_non_na = ida.notnull().rolling(time=window, center=True, min_periods = 1).sum()
         ibad_mask = (rolling_non_na < min_non_na).values
-        # ida[ibad_mask] = np.nan
-        # da[:, idx] = ida
+        ida[ibad_mask] = np.nan
+        da[:, idx] = ida
         bad_mask[:, idx] = ibad_mask
 
     if station_frac is not None:
         frac_flagged = bad_mask.mean(dim='time')
         bad_stations = (frac_flagged > station_frac).values  # .values here
-        da[:, bad_stations] = np.nan
+        
         bad_mask[:, bad_stations] = True
         n_flagged = int(bad_stations.sum())
         print(f"Station completeness filter (station_frac={station_frac}): flagged {n_flagged} stations entirely")
 
-    da = da.where(~bad_mask)
-
     return da, bad_mask
 
-# todo: remove print statements form filter_changpoint in the future
 def filter_changepoint(da, percentile=10, threshold=None, nstd=None, 
-                       direction='greater', pen=250, model = 'l2', jump=20, min_size=48):
+                       direction='greater', pen=250, model = 'l1', jump=20, min_size=48):
     """
     Filter out time periods within individual stations where a chosen percentile
     of observed values within a change point segment is abnormally high or low,
@@ -576,7 +612,10 @@ def filter_changepoint(da, percentile=10, threshold=None, nstd=None,
         the threshold.
     pen : float
         Penalty parameter. Higher values detect only larger shifts.
-        This changes and requires tuning depending on the model coost function.
+        This changes and requires tuning depending on the model cost function.
+    model: str
+        Cost function model to use in ruptures. 'l1' is Least Absolute
+        Deviation the median.
     jump : int
         Jump parameter. Only every nth index is considered as a candidate
         change point. Higher values are faster but less precise in location.
@@ -584,14 +623,16 @@ def filter_changepoint(da, percentile=10, threshold=None, nstd=None,
         Minimum number of observations per segment. Prevents change points
         from being placed too close together. With hourly data, min_size=48
         means no segment shorter than 48 hours.
+
     Returns
     -------
     da : xr.DataArray
-        Same as input but with flagged segments set to NaN
+        Same as input but cleaned!
     bad_mask : xr.DataArray
         Mask showing which values are bad (True where bad).
         Same dimensionality as da.
     """
+
     da = da.compute()
     _preflight(da)
     if not 0 <= percentile <= 100:
@@ -745,11 +786,11 @@ def run_filter_bank(da, config):
             continue
         if not isinstance(kwargs, list):
             kwargs = [kwargs]
-
         for kwarg in kwargs:
             _, mask = fun(da.copy(), **kwarg)
-            if fun not in filter_masks:
-                filter_masks[fun] = []
+            print(f"{fun.__name__} mask sum: {int(mask.sum())}")
+            print(f"da NaN count before: {int(np.isnan(da).sum())}")
+            filter_masks[fun] = filter_masks.get(fun, [])
             filter_masks[fun].append(mask)
             final_mask |= mask
 
@@ -759,11 +800,13 @@ def run_filter_bank(da, config):
         if not isinstance(kwargs, list):
             kwargs = [kwargs]
         for kwarg in kwargs:
-            da, mask = fun(da, **kwarg)
+            _, mask = fun(da, **kwarg)
             if fun not in filter_masks:
                 filter_masks[fun] = []
             filter_masks[fun].append(mask)
             final_mask |= mask
+
+    da = da.where(~final_mask, np.nan)
 
     return da, final_mask, filter_masks
 
@@ -774,13 +817,17 @@ CONFIG_WS10M = {
     filter_constant: dict(value=None),
     filter_percentile: [dict(percentile=10, nstd=3, threshold=None, direction='greater'),
                         dict(percentile=95, threshold=1, direction='less')],
-    filter_run_on_other_da: dict(run_on_da='abs_diff_windspeed_10m', base_filter=filter_changepoint, base_filter_kwargs=dict(percentile=10, nstd=3, direction='greater', pen=350, jump=20, min_size=168)),
-    'post': {filter_completeness: dict(completeness=80, window=24, station_frac=None),}
+    filter_run_on_other_da: dict(run_on_da='abs_diff_windspeed_10m', base_filter=filter_changepoint, base_filter_kwargs=dict(percentile=50, threshold=4.2, direction='greater', pen=250, jump=20, min_size=168)),
+    'post': {filter_run_on_other_da: dict(run_on_da='abs_diff_windspeed_10m', base_filter=filter_mean, base_filter_kwargs=dict(threshold=4.2, direction = 'greater')),
+             filter_completeness: dict(completeness=80, window=24, station_frac=None),}
 }
 
 """Config for run_filter_bank to clean 10-meter windspeed.
 Upper limit of based on regional maximum official wind gust of 66 m/s.
-Ex-percentile of 1 to retain extreme windspeed events."""
+Ex-percentile of 1 to retain extreme windspeed events. Median of station mean
+absolute windspeed difference is 1.799 with a scaled MAD of 0.64. Threshold of
+4.2 for the percentile filter is based on median + 5*scaled MAD of
+the distribution of station mean absolute windspeed differences."""
 
 CONFIG_WDIR10M = {
     filter_value_range: dict(lower=0, upper=360),
@@ -809,10 +856,13 @@ CONFIG_T2M = {
     filter_spikes: dict(diff_threshold=15, ex_percentile=2),
     filter_constant: dict(value=None),
     filter_value_range: dict(lower=-60, upper=60),
-    filter_run_on_other_da: dict(run_on_da='abs_diff_temperature_2m', base_filter=filter_changepoint, base_filter_kwargs=dict(percentile=10, nstd=3, direction='greater', pen=350, jump=20, min_size=168)),
-    'post': {filter_completeness: dict(completeness=80, window=24, station_frac=None),}
+    filter_run_on_other_da: dict(run_on_da='abs_diff_temperature_2m', base_filter=filter_changepoint, base_filter_kwargs=dict(percentile=50, threshold=4.4, direction='greater', pen=250, jump=20, min_size=168)),
+    'post': {filter_run_on_other_da: dict(run_on_da='abs_diff_temperature_2m', base_filter=filter_mean, base_filter_kwargs=dict(threshold=4.4, direction = 'greater')),
+            filter_completeness: dict(completeness=80, window=24, station_frac=None),}
 }
-"""Config for ``run_filter_bank`` to clean near-surface 2-meter temperature"""
+"""Config for ``run_filter_bank`` to clean near-surface 2-meter temperature.
+Threshold of 4.4 for the percentile filter is based on the median
++ 4*scaled MAD of the distribution of station mean absolute temperature differences."""
 
 CONFIG_RH2M = {
     filter_spikes: dict(diff_threshold=15, ex_percentile=2),
