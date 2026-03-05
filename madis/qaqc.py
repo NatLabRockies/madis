@@ -144,7 +144,7 @@ def filter_spikes(da, diff_threshold=15, ex_percentile=2, max_spike_length=3):
         diff_nonan = np.abs(ida[~np.isnan(ida)].diff('time').values)
         
         spike_mask_compressed = np.zeros(len(valid_values), dtype=bool)
-        spike_mask_compressed[1:-1] = (diff_nonan[:-1] > diff_threshold) & (diff_nonan[1:] > diff_threshold)
+        spike_mask_compressed[1:-1] = (diff_nonan[:-1] > diff_threshold) | (diff_nonan[1:] > diff_threshold)
 
         top_p = 100 - ex_percentile
         extreme_compressed = (valid_values > np.nanpercentile(valid_values, top_p)) | \
@@ -710,7 +710,7 @@ def filter_changepoint(da, percentile=10, threshold=None, nstd=None,
     print(msg)
     return da, bad_mask
 
-def filter_run_on_other_da(da, *, run_on_da, base_filter, base_filter_kwargs=None):
+def filter_run_on_other_da(da, *, run_on_da, base_filter, base_filter_kwargs=None, apply_to = None):
     """
     Generic adapter:
       - compute mask by running base_filter on run_on_da
@@ -726,6 +726,11 @@ def filter_run_on_other_da(da, *, run_on_da, base_filter, base_filter_kwargs=Non
         A filter function that takes an xr.DataArray and returns (filtered_da, mask)
     base_filter_kwargs: dict, optional
         Keyword arguments to pass to the base_filter function
+    apply_to: str, optional
+        Specifies which data array(s) to apply the mask to. Options are:
+        - 'da': apply mask to da only
+        - 'run_on_da': apply mask to run_on_da only
+        - 'both': apply mask to both da and run_on_da
     
     Returns
     -------
@@ -743,6 +748,11 @@ def filter_run_on_other_da(da, *, run_on_da, base_filter, base_filter_kwargs=Non
         base_filter_kwargs = {}
 
     _, mask = base_filter(run_on_da.copy(), **base_filter_kwargs)
+
+    if apply_to in ('ds', 'both'):
+        da = da.where(~mask, np.nan)
+    if apply_to in ('run_on_da', 'both'):
+        run_on_da = run_on_da.where(~mask, np.nan)
 
     return da, mask
 
@@ -813,12 +823,15 @@ def run_filter_bank(da, config):
 CONFIG_WS10M = {
     filter_spike_groups: dict(N=3, value_thresh=20, up_thresh=20,
                               down_thresh=20, nan_spikes=True),
+    filter_spikes: dict(diff_threshold=20, ex_percentile=1),
     filter_value_range: dict(lower=0, upper=66),
     filter_constant: dict(value=None),
     filter_percentile: [dict(percentile=10, nstd=3, threshold=None, direction='greater'),
                         dict(percentile=95, threshold=1, direction='less')],
-    filter_run_on_other_da: dict(run_on_da='abs_diff_windspeed_10m', base_filter=filter_changepoint, base_filter_kwargs=dict(percentile=50, threshold=4.2, direction='greater', pen=250, jump=20, min_size=168)),
-    'post': {filter_run_on_other_da: dict(run_on_da='abs_diff_windspeed_10m', base_filter=filter_mean, base_filter_kwargs=dict(threshold=4.2, direction = 'greater')),
+    filter_run_on_other_da: dict(run_on_da='abs_diff_windspeed_10m', base_filter=filter_changepoint, base_filter_kwargs=dict(percentile=50, threshold=4.2, direction='greater',
+                                                                                                                             pen=300, jump=20, min_size=168), apply_to = 'both'),
+    'post': {filter_run_on_other_da: dict(run_on_da='abs_diff_windspeed_10m', base_filter=filter_mean, base_filter_kwargs=dict(threshold=8, direction = 'greater'), apply_to = 'run_on_da'),
+             filter_spikes: dict(diff_threshold=20, ex_percentile=1),
              filter_completeness: dict(completeness=80, window=24, station_frac=None),}
 }
 
@@ -856,8 +869,10 @@ CONFIG_T2M = {
     filter_spikes: dict(diff_threshold=15, ex_percentile=2),
     filter_constant: dict(value=None),
     filter_value_range: dict(lower=-60, upper=60),
-    filter_run_on_other_da: dict(run_on_da='abs_diff_temperature_2m', base_filter=filter_changepoint, base_filter_kwargs=dict(percentile=50, threshold=4.4, direction='greater', pen=250, jump=20, min_size=168)),
-    'post': {filter_run_on_other_da: dict(run_on_da='abs_diff_temperature_2m', base_filter=filter_mean, base_filter_kwargs=dict(threshold=4.4, direction = 'greater')),
+    filter_run_on_other_da: dict(run_on_da='abs_diff_temperature_2m', base_filter=filter_changepoint, base_filter_kwargs=dict(percentile=50, threshold=4.4, direction='greater',
+                                                                                                                              pen=300, jump=20, min_size=168), apply_to = 'both'),
+    'post': {filter_run_on_other_da: dict(run_on_da='abs_diff_temperature_2m', base_filter=filter_mean, base_filter_kwargs=dict(threshold=8, direction = 'greater'), apply_to = 'run_on_da'),
+            filter_spikes: dict(diff_threshold=15, ex_percentile=2),
             filter_completeness: dict(completeness=80, window=24, station_frac=None),}
 }
 """Config for ``run_filter_bank`` to clean near-surface 2-meter temperature.
