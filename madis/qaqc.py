@@ -1,6 +1,7 @@
 """Custom QA/QC data filters for MADIS observational data"""
 
 import logging
+from logging import config
 
 import numpy as np
 import pandas as pd
@@ -749,12 +750,45 @@ def filter_run_on_other_da(da, *, run_on_da, base_filter, base_filter_kwargs=Non
 
     _, mask = base_filter(run_on_da.copy(), **base_filter_kwargs)
 
-    if apply_to in ('ds', 'both'):
+    if apply_to in ('da', 'both'):
         da = da.where(~mask, np.nan)
     if apply_to in ('run_on_da', 'both'):
-        run_on_da = run_on_da.where(~mask, np.nan)
+        # run_on_da = run_on_da.where(~mask, np.nan)
+        run_on_da[...] = run_on_da.where(~mask, np.nan)
 
     return da, mask
+
+def _apply_filters(da, stage_config, filter_masks):
+    """Run a stage of filters, returning the combined mask for this stage.
+    
+        Parameters
+    ----------
+    da : xr.DataArray
+        2D array with coordinates ("time", "space") for multiple observation
+        stations in a given region for a single variable
+    stage_config : dict
+        Dictionary of format {filter_function: {kwarg: value}} such that all of
+        the requested "filter_function(s)" will be run on ``da`` and
+        kwarg/value will be passed in as arguments to the function.
+    filter_masks : dict
+        Dictionary to be updated with the masks output by each filter function.
+
+    Returns
+    -------
+    stage_mask : xr.DataArray
+        Mask showing which values are bad (True where bad) in ANY filters from
+        this stage.
+    """
+    stage_mask = False
+    for fun, kwargs in stage_config.items():
+        if not isinstance(kwargs, list):
+            kwargs = [kwargs]
+        for kwarg in kwargs:
+            _, mask = fun(da.copy(), **kwarg)
+            filter_masks[fun] = filter_masks.get(fun, [])
+            filter_masks[fun].append(mask)
+            stage_mask |= mask
+    return stage_mask
 
 def run_filter_bank(da, config):
     """Run a set of filters on a collection of observation stations in a
@@ -771,8 +805,9 @@ def run_filter_bank(da, config):
         Dictionary of format {filter_function: {kwarg: value}} such that all of
         the requested "filter_function(s)" will be run on ``da`` and
         kwarg/value will be passed in as arguments to the function. If a 
-        ``'post'`` key is included in the config, those filters will be run on
-        cleaned data after the initial filters have been applied. 
+        ``'config_2'`` or ``'config_3'`` key is included in the config,
+        those filters will be run on cleaned data after the initial filters
+        have been applied. 
 
     Returns
     -------
@@ -785,37 +820,20 @@ def run_filter_bank(da, config):
         Dictionary with the same keys as config and values as the masks output
         by each respective filter
     """
-    
-    post_config = config.get('post', {})
+    config_1 = {k: v for k, v in config.items() if k not in ('config_2', 'config_3')}
+    config_2 = config.get('config_2', {})
+    config_3 = config.get('config_3', {})
 
     final_mask = False
     filter_masks = {}
 
-    for fun, kwargs in config.items():
-        if fun == 'post':
-            continue
-        if not isinstance(kwargs, list):
-            kwargs = [kwargs]
-        for kwarg in kwargs:
-            _, mask = fun(da.copy(), **kwarg)
-            print(f"{fun.__name__} mask sum: {int(mask.sum())}")
-            print(f"da NaN count before: {int(np.isnan(da).sum())}")
-            filter_masks[fun] = filter_masks.get(fun, [])
-            filter_masks[fun].append(mask)
-            final_mask |= mask
-
+    final_mask |= _apply_filters(da, config_1, filter_masks)
     da = da.where(~final_mask, np.nan)
 
-    for fun, kwargs in post_config.items():
-        if not isinstance(kwargs, list):
-            kwargs = [kwargs]
-        for kwarg in kwargs:
-            _, mask = fun(da, **kwarg)
-            if fun not in filter_masks:
-                filter_masks[fun] = []
-            filter_masks[fun].append(mask)
-            final_mask |= mask
+    final_mask |= _apply_filters(da, config_2, filter_masks)
+    da = da.where(~final_mask, np.nan)
 
+    final_mask |= _apply_filters(da, config_3, filter_masks)
     da = da.where(~final_mask, np.nan)
 
     return da, final_mask, filter_masks
@@ -825,35 +843,37 @@ CONFIG_WS10M = {
                               down_thresh=20, nan_spikes=True),
     filter_spikes: dict(diff_threshold=20, ex_percentile=1),
     filter_value_range: dict(lower=0, upper=66),
+    filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=4),
     filter_constant: dict(value=None),
     filter_percentile: [dict(percentile=10, nstd=3, threshold=None, direction='greater'),
                         dict(percentile=95, threshold=1, direction='less')],
-    filter_run_on_other_da: dict(run_on_da='abs_diff_windspeed_10m', base_filter=filter_changepoint, base_filter_kwargs=dict(percentile=50, threshold=4.2, direction='greater',
+    filter_run_on_other_da: dict(run_on_da='abs_diff_windspeed_10m', base_filter=filter_changepoint, base_filter_kwargs=dict(percentile=50, threshold=8, direction='greater',
                                                                                                                              pen=300, jump=20, min_size=168), apply_to = 'both'),
-    'post': {filter_run_on_other_da: dict(run_on_da='abs_diff_windspeed_10m', base_filter=filter_mean, base_filter_kwargs=dict(threshold=8, direction = 'greater'), apply_to = 'run_on_da'),
+    'config_2': {filter_run_on_other_da: dict(run_on_da='abs_diff_windspeed_10m', base_filter=filter_mean, base_filter_kwargs=dict(threshold=8, direction = 'greater'), apply_to = 'run_on_da'),
              filter_spikes: dict(diff_threshold=20, ex_percentile=1),
-             filter_completeness: dict(completeness=80, window=24, station_frac=None),}
+            filter_spike_groups: dict(N=3, value_thresh=20, up_thresh=20, down_thresh=20, nan_spikes=True),},
+    'config_3':  {filter_completeness: dict(completeness=80, window=24, station_frac=None),}
 }
 
 """Config for run_filter_bank to clean 10-meter windspeed.
 Upper limit of based on regional maximum official wind gust of 66 m/s.
-Ex-percentile of 1 to retain extreme windspeed events. Median of station mean
-absolute windspeed difference is 1.799 with a scaled MAD of 0.64. Threshold of
-4.2 for the percentile filter is based on median + 5*scaled MAD of
-the distribution of station mean absolute windspeed differences."""
+Ex-percentile of 1 to retain extreme windspeed events. Linear interpolation is
+used to fill 2 data points, so maximum linear gap is set to 4. """
 
 CONFIG_WDIR10M = {
     filter_value_range: dict(lower=0, upper=360),
+    filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=4),
     filter_constant: dict(value=None),
-    'post': {filter_completeness: dict(completeness=80, window=24, station_frac=None),}
+    'config_2': {filter_completeness: dict(completeness=80, window=24, station_frac=None),}
 }
 """Config for run_filter_bank to clean 10-meter wind direction."""
 
 CONFIG_GUST10M = {
     filter_spikes: dict(diff_threshold=20, ex_percentile=1),
+    filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=4),
     filter_value_range: dict(lower=0, upper=66),
     filter_constant: dict(value=None),
-    'post': {filter_completeness: dict(completeness=80, window=24, station_frac=0.5),}
+    'config_2': {filter_completeness: dict(completeness=80, window=24, station_frac=0.5),}
 }
 """Config for run_filter_bank to clean 10-meter wind gusts.
 Upper limit of based on regional maximum official wind gust of 66 m/s.
@@ -861,33 +881,35 @@ Ex-percentile of 1 to retain extreme windspeed events."""
 
 CONFIG_P0M = {
     filter_constant: dict(value=None),
-    'post': {filter_completeness: dict(completeness=80, window=24, station_frac=0.5),}
+    filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=4),
+    'config_2': {filter_completeness: dict(completeness=80, window=24, station_frac=0.5),}
 }
 """Config for ``run_filter_bank`` to clean near-surface pressure"""
 
 CONFIG_T2M = {
     filter_spikes: dict(diff_threshold=15, ex_percentile=2),
     filter_constant: dict(value=None),
+    filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=4),
     filter_value_range: dict(lower=-60, upper=60),
-    filter_run_on_other_da: dict(run_on_da='abs_diff_temperature_2m', base_filter=filter_changepoint, base_filter_kwargs=dict(percentile=50, threshold=4.4, direction='greater',
+    filter_run_on_other_da: dict(run_on_da='abs_diff_temperature_2m', base_filter=filter_changepoint, base_filter_kwargs=dict(percentile=50, threshold=6, direction='greater',
                                                                                                                               pen=300, jump=20, min_size=168), apply_to = 'both'),
-    'post': {filter_run_on_other_da: dict(run_on_da='abs_diff_temperature_2m', base_filter=filter_mean, base_filter_kwargs=dict(threshold=8, direction = 'greater'), apply_to = 'run_on_da'),
+    'config_2': {filter_run_on_other_da: dict(run_on_da='abs_diff_temperature_2m', base_filter=filter_mean, base_filter_kwargs=dict(threshold=8, direction = 'greater'), apply_to = 'run_on_da'),
             filter_spikes: dict(diff_threshold=15, ex_percentile=2),
             filter_completeness: dict(completeness=80, window=24, station_frac=None),}
 }
-"""Config for ``run_filter_bank`` to clean near-surface 2-meter temperature.
-Threshold of 4.4 for the percentile filter is based on the median
-+ 4*scaled MAD of the distribution of station mean absolute temperature differences."""
+"""Config for ``run_filter_bank`` to clean near-surface 2-meter temperature."""
 
 CONFIG_RH2M = {
     filter_spikes: dict(diff_threshold=15, ex_percentile=2),
     filter_value_range: dict(lower=0, upper=100),
+    filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=4),
     filter_constant: dict(value=None),
-    'post': {filter_completeness: dict(completeness=80, window=24, station_frac=None),}
+    'config_2': {filter_completeness: dict(completeness=80, window=24, station_frac=None),}
 }
 """Config for ``run_filter_bank`` to clean near-surface 2-meter relative
 humidity"""
 
 CONFIG_PRECIP1H = {
-        filter_value_range: dict(lower=0, upper=.5) }
+        filter_value_range: dict(lower=0, upper=.5)
+}
 """Config for ``run_filter_bank`` to clean near-surface 1-hour precipitation"""
