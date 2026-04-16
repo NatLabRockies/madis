@@ -6,13 +6,13 @@ requires = [
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "NREL-madis"
+name = "NLR-madis"
 dynamic = ["version"]
 description = "Madis Downloading Package"
-keywords = ["madis", "NREL"]
+keywords = ["madis", "NLR"]
 readme = "README.rst"
 authors = [
-  {name = "Brandon Benton", email = "brandon.benton@nrel.gov"},
+  {name = "Brandon Benton", email = "brandon.benton@nlr.gov"},
 ]
 license = {text = "BSD-3-Clause"}
 requires-python = ">= 3.8"
@@ -27,7 +27,7 @@ classifiers=[
   "Programming Language :: Python :: 3.11",
 ]
 dependencies = [
-  "NREL-rex>=0.2.91",
+  "NLR-rex>=0.2.91",
   "dask>=2022.0",
   "h5netcdf>=1.1.0",
   "netCDF4>=1.5.8,<1.7",
@@ -35,6 +35,10 @@ dependencies = [
   "numpy>=1.7.0,<2.0.0",
   "xarray>=2023.0"
 ]
+
+[project.urls]
+homepage = "https://github.com/NatLabRockies/madis"
+repository = "https://github.com/NatLabRockies/madis"
 
 [tool.ruff]
 line-length = 79
@@ -224,3 +228,5 @@ packages = ["madis"]
 
 [tool.setuptools_scm]
 version_file = "madis/_version.py"
+version_scheme = "guess-next-dev"
+fallback_version = "0.0.1"
