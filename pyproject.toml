@@ -27,7 +27,7 @@ classifiers=[
   "Programming Language :: Python :: 3.11",
 ]
 dependencies = [
-  "NLR-rex>=0.2.91",
+  "NREL-rex>=0.2.91",
   "dask>=2022.0",
   "h5netcdf>=1.1.0",
   "netCDF4>=1.5.8,<1.7",
