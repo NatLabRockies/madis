@@ -1,10 +1,6 @@
 """Custom QA/QC data filters for MADIS observational data"""
 
 import logging
-from logging import config
-import time
-import os
-from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -85,7 +81,9 @@ def filter_linear_gaps(da, diff_threshold=1e-4, n_threshold=3):
 
         groups = (~extended_mask).cumsum()
         groups[~extended_mask] = 0  # Valid diff values
-        unique_groups, group_counts = np.unique(groups[groups > 0], return_counts=True)
+        unique_groups, group_counts = np.unique(
+            groups[groups > 0], return_counts=True
+        )
         size_map = dict(zip(unique_groups, group_counts))
         long_lines = np.vectorize(lambda g: size_map.get(g, 0) >= n_threshold)
         long_lines = long_lines(groups)
@@ -100,7 +98,7 @@ def filter_linear_gaps(da, diff_threshold=1e-4, n_threshold=3):
     return da, bad_mask
 
 
-def filter_spikes(da, diff_threshold=15, ex_percentile=2, max_spike_length=3):
+def filter_spikes(da, diff_threshold=15, ex_percentile=2):
     """Some MADIS timeseries data appears to have momentary extreme spikes.
     This function identifies spikes that are both dramatic (large 1st
     derivative) and also extreme (outside a percentile threshold)
@@ -153,9 +151,9 @@ def filter_spikes(da, diff_threshold=15, ex_percentile=2, max_spike_length=3):
         )
 
         top_p = 100 - ex_percentile
-        extreme_compressed = (valid_values > np.nanpercentile(valid_values, top_p)) | (
-            valid_values < np.nanpercentile(valid_values, ex_percentile)
-        )
+        extreme_compressed = (
+            valid_values > np.nanpercentile(valid_values, top_p)
+        ) | (valid_values < np.nanpercentile(valid_values, ex_percentile))
 
         bad_compressed = spike_mask_compressed & extreme_compressed
 
@@ -232,7 +230,9 @@ def filter_spike_groups(
         # pad with False on both ends so diff catches edges
         edges = np.diff(np.r_[False, high, False].astype(np.int8))
         starts = np.where(edges == 1)[0]  # index in xv where run starts
-        ends = np.where(edges == -1)[0] - 1  # index in xv where run ends (inclusive)
+        ends = (
+            np.where(edges == -1)[0] - 1
+        )  # index in xv where run ends (inclusive)
 
         # length constraint: 1..N
         lengths = ends - starts + 1
@@ -311,7 +311,8 @@ def filter_seasonal_anomalies(da, nstd=4):
     n_removed = bad_mask.sum().values
     n_total = bad_mask.size
     print(
-        f"Seasonal anomaly filter (nstd={nstd}): removed {n_removed} values out of {n_total} ({100 * n_removed / n_total:.2f}%)"
+        f"Seasonal anomaly filter (nstd={nstd}): removed {n_removed} values"
+        f" out of {n_total} ({100 * n_removed / n_total:.2f}%)"
     )
 
     return da, bad_mask
@@ -454,11 +455,17 @@ def filter_percentile(
     _preflight(da)
 
     if not 0 <= percentile <= 100:
-        raise ValueError(f"percentile must be between 0 and 100, got {percentile}")
+        raise ValueError(
+            f"percentile must be between 0 and 100, got {percentile}"
+        )
     if direction not in ("greater", "less"):
-        raise ValueError(f"direction must be 'greater' or 'less', got {direction}")
+        raise ValueError(
+            f"direction must be 'greater' or 'less', got {direction}"
+        )
 
-    percentile_per_station = da.quantile(percentile / 100.0, dim="time", skipna=True)
+    percentile_per_station = da.quantile(
+        percentile / 100.0, dim="time", skipna=True
+    )
 
     if threshold is not None:
         mode_msg = "fixed"
@@ -466,9 +473,13 @@ def filter_percentile(
         mean_p = percentile_per_station.mean().values
         std_p = float(percentile_per_station.std(skipna=True).values)
         threshold = (
-            mean_p + nstd * std_p if direction == "greater" else mean_p - nstd * std_p
+            mean_p + nstd * std_p
+            if direction == "greater"
+            else mean_p - nstd * std_p
         )
-        mode_msg = f"network-based (mean={mean_p:.2f}, std={std_p:.2f}, nstd={nstd})"
+        mode_msg = (
+            f"network-based (mean={mean_p:.2f}, std={std_p:.2f}, nstd={nstd})"
+        )
     elif method == "median":
         median_p = percentile_per_station.median().values
         mad_p = np.nanmedian(np.abs(percentile_per_station.values - median_p))
@@ -478,10 +489,12 @@ def filter_percentile(
             if direction == "greater"
             else median_p - nstd * scaled_mad_p
         )
-        mode_msg = f"network-based (median={median_p:.2f}, scaled_mad={scaled_mad_p:.2f}, nstd={nstd})"
+        mode_msg = f"network-based (median={median_p:.2f},"
+        f"scaled_mad={scaled_mad_p:.2f}, nstd={nstd})"
     else:
         raise ValueError(
-            f"method must be 'mean' or 'median' when threshold is not provided, got '{method}'"
+            f"method must be 'mean' or 'median' when threshold "
+            f"is not provided, got '{method}'"
         )
 
     if direction == "greater":
@@ -534,7 +547,9 @@ def filter_mean(da, threshold, direction="greater"):
 
     _preflight(da)
     if direction not in ("greater", "less"):
-        raise ValueError(f"direction must be 'greater' or 'less', got {direction}")
+        raise ValueError(
+            f"direction must be 'greater' or 'less', got {direction}"
+        )
 
     mean_per_station = da.mean(dim="time", skipna=True)
     flagged = (
@@ -583,23 +598,28 @@ def filter_error(da, threshold):
 def filter_completeness(da, completeness=80, window=24, station_frac=None):
     """
     Filter out time periods within individual stations where the percentage of
-    NA values within a rolling window exceeds a specified completeness threshold.
+    NA values within a rolling window exceeds a specified completeness
+    threshold.
     This is designed to catch sensors that are temporarily offline or have
-    communication issues, resulting in many missing values for a period of time.
+    communication issues, resulting in many missing values for a period of
+    time.
+
     Parameters
     ----------
     da : xr.DataArray
-        The input data array containing observation variables with dimensions ("time", "space").
+        The input data array containing observation variables with dimensions
+        ("time", "space").
     completeness : float
-        The minimum percentage of non-NA values required within the rolling window
-        for the data to be considered valid. For example, completeness=50 means
-        at least 50% of the values in the window must be non-NA.
+        The minimum percentage of non-NA values required within the rolling
+        window for the data to be considered valid. For example,
+        completeness=50 means at least 50% of the values in the window must
+        be non-NA.
     window : int
-        The size of the rolling window in number of observations. For hourly data,
-        a window of 24 would correspond to a 24-hour period.
+        The size of the rolling window in number of observations.
+        For hourly data, a window of 24 would correspond to a 24-hour period.
     station_frac : float, optional
-        The minimum fraction of flagged values required to flag an entire station.
-        If None, this feature is disabled.
+        The minimum fraction of flagged values required to flag an entire
+        station. If None, this feature is disabled.
 
     Returns
     -------
@@ -624,7 +644,9 @@ def filter_completeness(da, completeness=80, window=24, station_frac=None):
     for idx in da["space"]:
         ida = da[:, idx]
         rolling_non_na = (
-            ida.notnull().rolling(time=window, center=True, min_periods=1).sum()
+            ida.notnull()
+            .rolling(time=window, center=True, min_periods=1)
+            .sum()
         )
         ibad_mask = (rolling_non_na < min_non_na).values
         ida[ibad_mask] = np.nan
@@ -638,7 +660,8 @@ def filter_completeness(da, completeness=80, window=24, station_frac=None):
         bad_mask[:, bad_stations] = True
         n_flagged = int(bad_stations.sum())
         print(
-            f"Station completeness filter (station_frac={station_frac}): flagged {n_flagged} stations entirely"
+            f"Station completeness filter (station_frac={station_frac}): "
+            f"flagged {n_flagged} stations entirely"
         )
 
     return da, bad_mask
@@ -657,7 +680,8 @@ def _process_station_changepoint(
     pen,
 ):
     """
-    Helper function to process a single station for the filter_changepoint function.
+    Helper function to process a single station for the filter_changepoint
+    function.
 
     Parameters
     ----------
@@ -734,16 +758,14 @@ def _process_station_changepoint(
         segment_values = valid_values[start:end]
         segment_times = valid_times[start:end]
         seg_percentile = np.percentile(segment_values, percentile)
-        if direction == "greater" and seg_percentile > threshold:
-            bad_times.extend(segment_times)
-            n_obs_flagged += len(segment_times)
-            station_flagged = True
-        elif direction == "less" and seg_percentile < threshold:
+        if (direction == "greater" and seg_percentile > threshold) or (
+            direction == "less" and seg_percentile < threshold
+        ):
             bad_times.extend(segment_times)
             n_obs_flagged += len(segment_times)
             station_flagged = True
 
-    return idx, bad_times, n_obs_flagged, False
+    return idx, bad_times, n_obs_flagged, station_flagged
 
 
 def filter_changepoint(
@@ -756,12 +778,11 @@ def filter_changepoint(
     model="l1",
     jump=20,
     min_size=48,
-    max_workers=1,
 ):
     """
-    Filter out time periods within individual stations where a chosen percentile
-    of observed values within a change point segment is abnormally high or low,
-    indicating a malfunctioning sensor for that period of time.
+    Filter out time periods within individual stations where a chosen
+    percentileof observed values within a change point segment is abnormally
+    high or low, indicating a malfunctioning sensor for that period of time.
     Uses change point detection (ruptures library) to identify segments
     within each station's time series, then flags segments where the chosen
     percentile exceeds a threshold. This is designed to catch sensors that are
@@ -811,9 +832,13 @@ def filter_changepoint(
     da = da.compute()
     _preflight(da)
     if not 0 <= percentile <= 100:
-        raise ValueError(f"percentile must be between 0 and 100, got {percentile}")
+        raise ValueError(
+            f"percentile must be between 0 and 100, got {percentile}"
+        )
     if direction not in ("greater", "less"):
-        raise ValueError(f"direction must be 'greater' or 'less', got {direction}")
+        raise ValueError(
+            f"direction must be 'greater' or 'less', got {direction}"
+        )
     if threshold is None and nstd is None:
         raise ValueError("Must provide either threshold or nstd")
     bad_mask = da.copy().astype(bool)
@@ -827,90 +852,49 @@ def filter_changepoint(
         mean_p = float(percentile_per_station.mean().values)
         std_p = float(percentile_per_station.std().values)
         threshold = (
-            mean_p + nstd * std_p if direction == "greater" else mean_p - nstd * std_p
+            mean_p + nstd * std_p
+            if direction == "greater"
+            else mean_p - nstd * std_p
         )
-        mode_msg = f"network-based (mean={mean_p:.2f}, std={std_p:.2f}, nstd={nstd})"
+        mode_msg = (
+            f"network-based (mean={mean_p:.2f}, std={std_p:.2f}, nstd={nstd})"
+        )
     else:
         mode_msg = "fixed"
     n_stations_flagged = 0
     n_obs_flagged = 0
     n_stations_skipped = 0
-    # Pull arrays out of xarray once before submitting to workers
     da_values = da.values
     time_values = da["time"].values
     space_values = da["space"].values
 
-    if max_workers == 1:
-        print("Running change point filter with max_workers=1 (no parallelization)")
-        # Serial fallback for debugging
-        for i, idx in enumerate(space_values):
-            idx_val, bad_times, n_obs, skip_reason = _process_station_changepoint(
-                idx,
-                da_values[:, i],
-                time_values,
-                percentile,
-                threshold,
-                direction,
-                model,
-                jump,
-                min_size,
-                pen,
-            )
-            if skip_reason:
-                n_stations_skipped += 1
-                continue
-            if bad_times:
-                bad_mask.loc[dict(time=bad_times, space=idx_val)] = True
-                n_obs_flagged += n_obs
-                n_stations_flagged += 1
-    else:
-        if max_workers is None:
-            max_workers = os.cpu_count()
-            print(
-                f"Running change point filter with max_workers={max_workers} (number of CPU cores)"
-            )
-        futures = {}
-        t_start = time.time()
-        with ProcessPoolExecutor(max_workers=max_workers) as exe:
-
-            for i, idx in enumerate(space_values):
-                fut = exe.submit(
-                    _process_station_changepoint,
-                    idx,
-                    da_values[:, i],
-                    time_values,
-                    percentile,
-                    threshold,
-                    direction,
-                    model,
-                    jump,
-                    min_size,
-                    pen,
-                )
-                futures[fut] = idx
-
-            for future in as_completed(futures):
-                idx = futures[future]
-                idx_val, bad_times, n_obs, skip_reason = future.result()
-
-                if skip_reason:
-                    n_stations_skipped += 1
-                    continue
-
-                if bad_times:
-                    bad_mask.loc[dict(time=bad_times, space=idx_val)] = True
-                    n_obs_flagged += n_obs
-                    n_stations_flagged += 1
-
-        print(
-            f"Parallel execution took {time.time() - t_start:.2f}s across {max_workers} workers"
+    for i, idx in enumerate(space_values):
+        idx_val, bad_times, n_obs, skip_reason = _process_station_changepoint(
+            idx,
+            da_values[:, i],
+            time_values,
+            percentile,
+            threshold,
+            direction,
+            model,
+            jump,
+            min_size,
+            pen,
         )
+        if skip_reason:
+            n_stations_skipped += 1
+            continue
+        if bad_times:
+            bad_mask.loc[dict(time=bad_times, space=idx_val)] = True
+            n_obs_flagged += n_obs
+            n_stations_flagged += 1
 
     # Apply mask to data
     da = da.where(~bad_mask, np.nan)
     msg = (
         f"Change point filter (P{int(percentile)}, {mode_msg}): "
-        f"threshold={threshold:.2f}, pen={pen}, jump={jump}, min_size={min_size}, "
+        f"threshold={threshold:.2f}, pen={pen}, jump={jump},"
+        f"min_size={min_size},"
         f"flagged {n_stations_flagged} stations ({n_obs_flagged} obs), "
         f"skipped {n_stations_skipped} stations"
     )
@@ -934,7 +918,8 @@ def filter_run_on_other_da(
     run_on_da: xr.DataArray
         The data array to run the base_filter on to compute the mask.
     base_filter: function
-        A filter function that takes an xr.DataArray and returns (filtered_da, mask)
+        A filter function that takes an xr.DataArray and returns (filtered_da,
+        mask)
     base_filter_kwargs: dict, optional
         Keyword arguments to pass to the base_filter function
     apply_to: str, optional
@@ -975,20 +960,20 @@ def resolve_run_on_other_da(config, ds):
 
     Parameters
     ----------
-    config: dict
+    var_config: dict
             The filter configuration dictionary, some filters might specify
             a 'filter_run_on_other_da' key with a 'run_on_da' kwarg that is a
-            string name of a variable in ds to run the filter on instead of da and
-            apply the mask to the da.
+            string name of a variable in ds to run the filter on instead of da
+            and apply the mask to the da.
     ds: xr.Dataset
             The dataset containing the variables referenced in the config.
 
     Returns
     -------
     resolved_config: dict
-            A copy of the input config where any 'run_on_da' string variable names
-            in 'filter_run_on_other_da' filters have been replaced with the actual
-            DataArrays from ds.
+            A copy of the input config where any 'run_on_da' string variable
+            names in 'filter_run_on_other_da' filters have been replaced with
+            the actual DataArrays from ds.
     """
     cfg = deepcopy(config)
     for stage in ("stage_1", "stage_2", "stage_3"):
@@ -1059,7 +1044,9 @@ def process_region(
     print(region)
     region_states = states[states["STUSPS"].isin(state_list)]
     region_polygon = region_states.unary_union
-    mask = stations_gdf.geometry.within(region_polygon)  # returns a boolean Series
+    mask = stations_gdf.geometry.within(
+        region_polygon
+    )  # returns a boolean Series
 
     ds_region = ds.isel(space=mask.values)
     ds_region = ds_region.assign_coords(
@@ -1074,22 +1061,23 @@ def process_region(
             continue
         da = ds_region[name].transpose("time", "space", transpose_coords=True)
 
-        config = CONFIG_MAP.get(name)
-        if config is None:
+        var_config = CONFIG_MAP.get(name)
+        if var_config is None:
             continue
 
-        config = dict(config)
+        var_config = dict(var_config)
 
-        config = resolve_run_on_other_da(config, ds_region)
+        var_config = resolve_run_on_other_da(var_config, ds_region)
 
-        cleaned, var_final_mask, _ = run_filter_bank(da, config)
+        cleaned, var_final_mask, _ = run_filter_bank(da, var_config)
 
         # Combine with dependency mask if it exists
         if name in MASK_DEPENDENCIES:
             dependent_var = MASK_DEPENDENCIES[name]
             if dependent_var not in mask_cache:
                 raise ValueError(
-                    f"Dependency {dependent_var} not found in mask_cache for {name}"
+                    f"Dependency {dependent_var} not found in "
+                    f"mask_cache for {name}",
                 )
             final_mask = var_final_mask | mask_cache[dependent_var]
             cleaned = da.where(~final_mask, np.nan)
@@ -1138,7 +1126,7 @@ def _apply_filters(da, stage_config, filter_masks):
     return stage_mask
 
 
-def run_filter_bank(da, config):
+def run_filter_bank(da, var_config):
     """Run a set of filters on a collection of observation stations in a
     single region for a single variable. The filter banks are combined such
     that each filter is run on the raw input data separately and then
@@ -1149,7 +1137,7 @@ def run_filter_bank(da, config):
     da : xr.DataArray
         2D array with coordinates ("time", "space") for multiple observation
         stations in a given region for a single variable
-    config : dict
+    var_config : dict
         Dictionary of format {filter_function: {kwarg: value}} such that all of
         the requested "filter_function(s)" will be run on ``da`` and
         kwarg/value will be passed in as arguments to the function. If a
@@ -1168,9 +1156,9 @@ def run_filter_bank(da, config):
         Dictionary with the same keys as config and values as the masks output
         by each respective filter
     """
-    stage_1 = config.get("stage_1", {})
-    stage_2 = config.get("stage_2", {})
-    stage_3 = config.get("stage_3", {})
+    stage_1 = var_config.get("stage_1", {})
+    stage_2 = var_config.get("stage_2", {})
+    stage_3 = var_config.get("stage_3", {})
 
     final_mask = False
     filter_masks = {}
@@ -1202,7 +1190,9 @@ CLEAN_ORDER = [
 
 CONFIG_WS10M = {
     "stage_1": {
-        filter_completeness: dict(completeness=8, window=8760, station_frac=None),
+        filter_completeness: dict(
+            completeness=8, window=8760, station_frac=None
+        ),
         filter_spike_groups: dict(
             N=3, value_thresh=20, up_thresh=20, down_thresh=20, nan_spikes=True
         ),
@@ -1255,32 +1245,41 @@ CONFIG_WS10M = {
         ),
     },
     "stage_3": {
-        filter_completeness: dict(completeness=50, window=24, station_frac=None),
+        filter_completeness: dict(
+            completeness=50, window=24, station_frac=None
+        ),
     },
 }
 
 """Config for run_filter_bank to clean 10-meter windspeed.
 Upper limit of based on regional maximum official wind gust of 50 m/s
 (Colline et al. 2024a).Ex-percentile of 1 to retain extreme windspeed events.
-Linear interpolation is used to fill 2 data points, so maximum linear gap is set to 4.
+Linear interpolation is used to fill 2 data points, so maximum linear gap is
+set to 4.
 P10 median + 6 MAD = 3.16, reomving 21 statoins in the COWY region"""
 
 CONFIG_WDIR10M = {
     "stage_1": {
-        filter_completeness: dict(completeness=8, window=8760, station_frac=None),
+        filter_completeness: dict(
+            completeness=8, window=8760, station_frac=None
+        ),
         filter_value_range: dict(lower=0, upper=360),
         filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=4),
         filter_constant: dict(value=None),
     },
     "stage_2": {
-        filter_completeness: dict(completeness=50, window=24, station_frac=None),
+        filter_completeness: dict(
+            completeness=50, window=24, station_frac=None
+        ),
     },
 }
 """Config for run_filter_bank to clean 10-meter wind direction."""
 
 CONFIG_GUST10M = {
     "stage_1": {
-        filter_completeness: dict(completeness=8, window=8760, station_frac=None),
+        filter_completeness: dict(
+            completeness=8, window=8760, station_frac=None
+        ),
         filter_spikes: dict(diff_threshold=20, ex_percentile=1),
         filter_spike_groups: dict(
             N=3, value_thresh=20, up_thresh=20, down_thresh=20, nan_spikes=True
@@ -1333,7 +1332,9 @@ CONFIG_GUST10M = {
         ),
     },
     "stage_3": {
-        filter_completeness: dict(completeness=50, window=24, station_frac=None),
+        filter_completeness: dict(
+            completeness=50, window=24, station_frac=None
+        ),
     },
 }
 """Config for run_filter_bank to clean 10-meter wind gusts.
@@ -1343,7 +1344,9 @@ Ex-percentile of 1 to retain extreme windspeed events."""
 
 CONFIG_T2M = {
     "stage_1": {
-        filter_completeness: dict(completeness=8, window=8760, station_frac=None),
+        filter_completeness: dict(
+            completeness=8, window=8760, station_frac=None
+        ),
         filter_spikes: dict(diff_threshold=15, ex_percentile=2),
         filter_constant: dict(value=None),
         filter_linear_gaps: dict(diff_threshold=0.05, n_threshold=4),
@@ -1380,7 +1383,9 @@ CONFIG_T2M = {
         filter_spikes: dict(diff_threshold=15, ex_percentile=2),
     },
     "stage_3": {
-        filter_completeness: dict(completeness=50, window=24, station_frac=None),
+        filter_completeness: dict(
+            completeness=50, window=24, station_frac=None
+        ),
     },
 }
 
@@ -1388,7 +1393,9 @@ CONFIG_T2M = {
 
 CONFIG_RH2M = {
     "stage_1": {
-        filter_completeness: dict(completeness=8, window=8760, station_frac=None),
+        filter_completeness: dict(
+            completeness=8, window=8760, station_frac=None
+        ),
         filter_value_range: dict(lower=0, upper=100),
         filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=4),
         filter_constant: dict(value=None),
@@ -1423,7 +1430,9 @@ CONFIG_RH2M = {
         ),
     },
     "stage_3": {
-        filter_completeness: dict(completeness=50, window=24, station_frac=None),
+        filter_completeness: dict(
+            completeness=50, window=24, station_frac=None
+        ),
     },
 }
 
