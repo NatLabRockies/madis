@@ -18,3 +18,5 @@ Run script
 ``python run_madis_downloader.py --help``
 
 ``python run_madis_downloader.py <region> <start_year> <end_year> <out_dir> -networks <networks>``
+
+NLR Software Record 26-050
