@@ -41,11 +41,11 @@ jobs:
           VALIDATE_PYTHON_FLAKE8: false
           VALIDATE_PYTHON_MYPY: false
           VALIDATE_PYTHON_PYLINT: false
+          VALIDATE_PYTHON_BLACK: false
           VALIDATE_YAML: false
           DEFAULT_BRANCH: origin/main
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LINTER_RULES_PATH: /
-          PYTHON_BLACK_CONFIG_FILE: .github/linters/.python-black
           FILTER_REGEX_INCLUDE: madis/*
 
   ruff:
