@@ -5,7 +5,6 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 import ruptures as rpt
-from copy import deepcopy
 from warnings import warn
 
 logger = logging.getLogger(__name__)
@@ -13,22 +12,32 @@ logger = logging.getLogger(__name__)
 
 def _preflight(da):
     """Check xr.dataarray object with observations for correct format for qa
-    functions"""
+    functions
+
+    Parameters
+    ----------
+    da : xr.DataArray
+        2D array with coordinates ("time", "space") for multiple observation
+        stations in a given region for a single variable
+
+    Raises
+    ------
+    AssertionError
+        If da is not an xr.DataArray, is not 2-dimensional, or does not have
+        dims ("time", "space")
+    """
     assert isinstance(da, xr.DataArray)
     assert da.ndim == 2
     assert da.dims == ("time", "space")
 
 
 def filter_linear_gaps(da, diff_threshold=1e-4, n_threshold=3):
-    """Some MADIS timeseries data appears to have large gaps that were
-    gap-filled using linear interpolation. This function identifies long blocks
-    of consecutive linear data and sets that data to NaN
+    """Some MADIS timeseries data appears to have large gaps of linear values.
+    This function identifies long blocks of consecutive linear data and sets
+    that data to NaN
 
-    This filter was developed on Mesonet station data for temperature and
-    humidity and has not yet been tested on other variables. It has also
-    successfully been applied to windspeed, wind direction, wind gust, and
-    surface pressure. Leave comments here when other variables have been
-    successfully filtered with this.
+    This filter has been applied to MADIS station data for temperature,
+    humidity, windspeed, wind direction, and wind gust.
 
     CAUTION!! If MADIS data is interpolated from hourly to 30min then
     n_threshold=3 will find linear blocks EVERYWHERE!
@@ -83,7 +92,7 @@ def filter_linear_gaps(da, diff_threshold=1e-4, n_threshold=3):
         groups[~extended_mask] = 0  # Valid diff values
         unique_groups, group_counts = np.unique(
             groups[groups > 0], return_counts=True
-        )
+            )
         size_map = dict(zip(unique_groups, group_counts))
         long_lines = np.vectorize(lambda g: size_map.get(g, 0) >= n_threshold)
         long_lines = long_lines(groups)
@@ -101,12 +110,10 @@ def filter_linear_gaps(da, diff_threshold=1e-4, n_threshold=3):
 def filter_spikes(da, diff_threshold=15, ex_percentile=2):
     """Some MADIS timeseries data appears to have momentary extreme spikes.
     This function identifies spikes that are both dramatic (large 1st
-    derivative) and also extreme (outside a percentile threshold)
+    derivative) and also extreme (outside a percentile threshold).
 
-    This filter was developed on Mesonet station data for temperature,
-    humidity, windspeed, and wind gust and has not yet been tested on other
-    variables. Leave comments here when other variables have been successfully
-    filtered with this.
+    This filter has been applied to MADIS station data for temperature,
+    humidity, windspeed, wind direction, and wind gust.
 
     Parameters
     ----------
@@ -117,12 +124,12 @@ def filter_spikes(da, diff_threshold=15, ex_percentile=2):
         If the first-derivative of da is greater than this value
         (including spanning across NaN values in da) then a value
         is considered to be a spike if it also meets the
-        ex_percentile threhsold
+        ex_percentile threshold.
     ex_percentile : float
         If the value of the spike is less than this percentile or
         greater than the percentile (100-ex_percentile), then the
         value is considered to be a spike if it also meets the
-        diff_threshold
+        diff_threshold.
 
     Returns
     -------
@@ -152,8 +159,9 @@ def filter_spikes(da, diff_threshold=15, ex_percentile=2):
 
         top_p = 100 - ex_percentile
         extreme_compressed = (
-            valid_values > np.nanpercentile(valid_values, top_p)
-        ) | (valid_values < np.nanpercentile(valid_values, ex_percentile))
+            (valid_values > np.nanpercentile(valid_values, top_p))
+            | (valid_values < np.nanpercentile(valid_values, ex_percentile))
+        )
 
         bad_compressed = spike_mask_compressed & extreme_compressed
 
@@ -180,7 +188,8 @@ def filter_spike_groups(
     dramatic (large 1st derivative) and have N consecutive values over a
     threshold.
 
-    This filter was developed on Mesonet station data for windspeed,
+    This filter was developed on Mesonet station data for windspeed, and has
+    been applied to wind speed and wind gust observations.
 
     Parameters
     ----------
@@ -199,9 +208,9 @@ def filter_spike_groups(
         down after an up spike, then a value is considered to be the start of a
         spike
     nan_spikes : bool
-        If this is true, consider a NaN immediately before or after the group N
-        to have a value zero so it can contribute to the derivative
-        calculation.
+        If this is true, replace NaN values with 0 before calculating the
+        derivative.This allows a NaN immediately before or after the group N to
+        contribute to the derivative calculation.
 
     Returns
     -------
@@ -214,7 +223,7 @@ def filter_spike_groups(
 
     _preflight(da)
     bad_mask = da.copy().astype(bool)
-    bad_mask.name = "bad_spike_grpup"
+    bad_mask.name = "bad_spike_group"
     bad_mask[...] = False
     T = len(da["time"])
 
@@ -230,9 +239,7 @@ def filter_spike_groups(
         # pad with False on both ends so diff catches edges
         edges = np.diff(np.r_[False, high, False].astype(np.int8))
         starts = np.where(edges == 1)[0]  # index in xv where run starts
-        ends = (
-            np.where(edges == -1)[0] - 1
-        )  # index in xv where run ends (inclusive)
+        ends = np.where(edges == -1)[0] - 1  # index in where ends (inclusive)
 
         # length constraint: 1..N
         lengths = ends - starts + 1
@@ -264,11 +271,14 @@ def filter_spike_groups(
 
 def filter_seasonal_anomalies(da, nstd=4):
     """Use seasonal statistics across multiple stations in a single region to
-    filter out values that are unrealistic based on time of year in the area
+    filter out values that are unrealistic based on time of year in the area.
 
     This filter was developed on Mesonet station data for temperature and
     humidity and has not yet been tested on other variables. Leave comments
     here when other variables have been successfully filtered with this.
+
+    CAUTION!! This filter is most appropriate for networks within a small,
+    climatically similar region.
 
     Parameters
     ----------
@@ -362,8 +372,8 @@ def filter_value_range(da, lower=None, upper=None):
 
 
 def filter_constant(da, value=None):
-    """Some MADIS observation locations have constant 0 values. This sets them
-    to NaN so they can be dropped later.
+    """Some MADIS observation locations have constant values for all time
+    steps. This sets those values to NaN so they can be dropped later.
 
     Parameters
     ----------
@@ -396,7 +406,7 @@ def filter_constant(da, value=None):
         constant = (da == value).all("time")
 
     da[:, constant] = np.nan
-    bad_mask[:, constant] = np.nan
+    bad_mask[:, constant] = True
 
     return da, bad_mask
 
@@ -405,51 +415,61 @@ def filter_percentile(
     da, percentile=None, method=None, nstd=3, threshold=None, direction=None
 ):
     """
-    Filter out an ENTIRE stations where a chosen percentile of observed values
-    is abnormally high or low, indicating systematic sensor issues or
-    miscalibration.
+     Filter out ENTIRE stations where a chosen percentile of observed values
+     is abnormally high or low, indicating systematic sensor issues or
+     miscalibration.
 
-    This filter operates in two ways:
-    1. Calculates a threshold based on the distribution of the chosen
-    percentile across all stations in the network.
-    2. Uses a pre-defined threshold.
+     This filter operates in two ways:
+     1. Calculates a threshold based on the distribution of the chosen
+     percentile across all stations in the network (requires method,
+    nstd, and direction).
+     2. Uses a pre-defined threshold (requires threshold and direction).
 
-    This filter was developed on Mesonet and METAR station data for wind speed
-    and has not yet been tested on other variables. Leave comments here when
-    other variables have been successfully filtered with this.
+     When using network-based thresholding (method is not None), two approaches
+     are available:
+     1. method='mean': threshold is mean ± nstd * std of the per-station
+     percentiles across the network.
+     2. method='median': threshold is median ± nstd * scaled_MAD of the
+     per-station percentiles across the network, where scaled_MAD =
+     1.4826 * MAD.
 
-    Example: For Mesonet network in 2024 in the greater COWY region with
-    percentile=10, nstd=3, direction = 'greater' generates a 10th percentile
-    threshold of 4.2 m/s, which flags 17 out of 3415 stations.
+     This filter was developed on MADIS station data for wind speed
+     and wind gusts.
+
+     Example: For Mesonet network in 2024 in the greater Colorado-Wyoming
+     region with percentile=10, method = mean, nstd=3, direction = 'greater'
+     generates a 10th percentile threshold of 4.2 m/s, which flags 17 out of
+     3415 stations.
 
     Parameters
     ----------
-    da : xr.DataArray
-        2D array with dims ("time", "space") for multiple observation
-        stations in a given region for a single variable
-    percentile : float
-        Percentile to calculate for each station (0-100).
-        Use 10 for 10th percentile, 50 for median, etc.
-    method : str, optional
-        Statistic used to compute the network-wide center for threshold
-        calculation. Must be 'mean' or 'median'. Required if threshold=None.
-    nstd : float
-        Number of standard deviations above mean for threshold calculation.
-        Only used if threshold=None (network-based mode). Default is 3.
-    threshold : float, optional
-        Pre-defined percentile threshold. If provided, uses fixed threshold
-        instead of calculating from network statistics.
-    direction : str
-        Whether to flag stations with percentile "greater" or "less" than the
-        threshold.
+     da : xr.DataArray
+         2D array with dims ("time", "space") for multiple observation
+         stations in a given region for a single variable
+     percentile : float
+         Percentile to calculate for each station (0-100).
+         Use 10 for 10th percentile, 50 for median, etc.
+     method : str, optional
+         Statistic used to compute the network-wide center for threshold
+         calculation. Must be 'mean' or 'median'. Required if threshold=None.
+     nstd : float
+         Number of standard deviations (or MAD equivalents) from the
+         network-wide mean (or median) used to compute a threshold.
+         Only used if threshold=None (network-based mode). Default is 3.
+     threshold : float, optional
+         Pre-defined percentile threshold. If provided, uses fixed threshold
+         instead of calculating from network statistics.
+     direction : str
+         Whether to flag stations with percentile "greater" or "less" than the
+         threshold.
 
     Returns
     -------
-    da : xr.DataArray
-        Same as input but cleaned!
-    bad_mask : xr.DataArray
-        Mask showing which values are bad (True where bad).
-        Same dimensionality as da.
+     da : xr.DataArray
+         Same as input but cleaned!
+     bad_mask : xr.DataArray
+         Mask showing which values are bad (True where bad).
+         Same dimensionality as da.
     """
 
     _preflight(da)
@@ -461,11 +481,11 @@ def filter_percentile(
     if direction not in ("greater", "less"):
         raise ValueError(
             f"direction must be 'greater' or 'less', got {direction}"
-        )
+            )
 
-    percentile_per_station = da.quantile(
-        percentile / 100.0, dim="time", skipna=True
-    )
+    percentile_per_station = da.quantile(percentile / 100.0,
+                                         dim="time",
+                                         skipna=True)
 
     if threshold is not None:
         mode_msg = "fixed"
@@ -478,7 +498,8 @@ def filter_percentile(
             else mean_p - nstd * std_p
         )
         mode_msg = (
-            f"network-based (mean={mean_p:.2f}, std={std_p:.2f}, nstd={nstd})"
+            f"network-based (mean={mean_p:.2f},"
+            f" std={std_p:.2f}, nstd={nstd})"
         )
     elif method == "median":
         median_p = percentile_per_station.median().values
@@ -489,8 +510,10 @@ def filter_percentile(
             if direction == "greater"
             else median_p - nstd * scaled_mad_p
         )
-        mode_msg = f"network-based (median={median_p:.2f},"
-        f"scaled_mad={scaled_mad_p:.2f}, nstd={nstd})"
+        mode_msg = (
+            f"network-based (median={median_p:.2f},"
+            f"scaled_mad={scaled_mad_p:.2f}, nstd={nstd})"
+        )
     else:
         raise ValueError(
             f"method must be 'mean' or 'median' when threshold "
@@ -523,7 +546,7 @@ def filter_mean(da, threshold, direction="greater"):
     """Filter out an ENTIRE stations where the mean of a variable across time
      is greater than a chosen threshold. This is designed to be applied to the
      error between MADIS observations and a reference dataset (e.g. HRRR f02)
-     to catach stations with persisten sensor bias.
+     to catch stations with persistent sensor bias.
 
     Parameters
     ----------
@@ -567,7 +590,8 @@ def filter_mean(da, threshold, direction="greater"):
 
 
 def filter_error(da, threshold):
-    """Filter individual time steps with extreme HRRR f02, observation error
+    """Filter individual time step where the absolute error between the
+    observations and the HRRR f02 forecast exceeds a threshold.
 
     Parameters
     ----------
@@ -575,7 +599,8 @@ def filter_error(da, threshold):
         2D array with coordinates ("time", "space") for multiple observation
         stations in a given region for a single variable
     threshold : float
-        The mean value threshold used to flag stations.
+        Absolute value threshold above which individual time steps are
+        flagged as erroneous.
 
     Returns
     -------
@@ -644,9 +669,9 @@ def filter_completeness(da, completeness=80, window=24, station_frac=None):
     for idx in da["space"]:
         ida = da[:, idx]
         rolling_non_na = (
-            ida.notnull()
-            .rolling(time=window, center=True, min_periods=1)
-            .sum()
+            ida.notnull().rolling(time=window,
+                                  center=True,
+                                  min_periods=1).sum()
         )
         ibad_mask = (rolling_non_na < min_non_na).values
         ida[ibad_mask] = np.nan
@@ -834,11 +859,11 @@ def filter_changepoint(
     if not 0 <= percentile <= 100:
         raise ValueError(
             f"percentile must be between 0 and 100, got {percentile}"
-        )
+            )
     if direction not in ("greater", "less"):
         raise ValueError(
             f"direction must be 'greater' or 'less', got {direction}"
-        )
+            )
     if threshold is None and nstd is None:
         raise ValueError("Must provide either threshold or nstd")
     bad_mask = da.copy().astype(bool)
@@ -857,7 +882,8 @@ def filter_changepoint(
             else mean_p - nstd * std_p
         )
         mode_msg = (
-            f"network-based (mean={mean_p:.2f}, std={std_p:.2f}, nstd={nstd})"
+            f"network-based (mean={mean_p:.2f}, "
+            f"std={std_p:.2f}, nstd={nstd})"
         )
     else:
         mode_msg = "fixed"
@@ -948,493 +974,6 @@ def filter_run_on_other_da(
     if apply_to in ("da", "both"):
         da = da.where(~mask, np.nan)
     if apply_to in ("run_on_da", "both"):
-        # run_on_da = run_on_da.where(~mask, np.nan)
         run_on_da[...] = run_on_da.where(~mask, np.nan)
 
     return da, mask
-
-
-def resolve_run_on_other_da(config, ds):
-    """
-    Replace variable name strings in filter configs with actual DataArrays.
-
-    Parameters
-    ----------
-    var_config: dict
-            The filter configuration dictionary, some filters might specify
-            a 'filter_run_on_other_da' key with a 'run_on_da' kwarg that is a
-            string name of a variable in ds to run the filter on instead of da
-            and apply the mask to the da.
-    ds: xr.Dataset
-            The dataset containing the variables referenced in the config.
-
-    Returns
-    -------
-    resolved_config: dict
-            A copy of the input config where any 'run_on_da' string variable
-            names in 'filter_run_on_other_da' filters have been replaced with
-            the actual DataArrays from ds.
-    """
-    cfg = deepcopy(config)
-    for stage in ("stage_1", "stage_2", "stage_3"):
-        if stage in cfg and filter_run_on_other_da in cfg[stage]:
-            stage_cfg = dict(cfg[stage])
-            value = stage_cfg[filter_run_on_other_da]
-            if isinstance(value, list):
-                resolved = []
-                for kwargs in value:
-                    kwargs = dict(kwargs)
-                    kwargs["run_on_da"] = ds[kwargs["run_on_da"]].transpose(
-                        "time", "space", transpose_coords=True
-                    )
-                    resolved.append(kwargs)
-                stage_cfg[filter_run_on_other_da] = resolved
-            else:
-                kwargs = dict(value)
-                kwargs["run_on_da"] = ds[kwargs["run_on_da"]].transpose(
-                    "time", "space", transpose_coords=True
-                )
-                stage_cfg[filter_run_on_other_da] = kwargs
-            cfg[stage] = stage_cfg
-    return cfg
-
-
-def process_region(
-    region,
-    state_list,
-    ds,
-    stations_gdf,
-    states,
-    CLEAN_ORDER,
-    CONFIG_MAP,
-    MASK_DEPENDENCIES,
-):
-    """Run filters on all stations in a region.
-
-    Subsets ds to stations within the union of the given states, then cleans
-    each variable in the order given by CLEAN_ORDER using its config from
-    CONFIG_MAP. Variables in MASK_DEPENDENCIES also inherit the mask of
-    their parent variable (e.g. wind direction inherits wind speed's mask).
-
-    Parameters
-    ----------
-    region : str
-        Region name.
-    state_list : list of str
-        Two-letter state codes, e.g. ["CO", "WY"].
-    ds : xr.Dataset
-        Observation dataset with dims ("time", "space").
-    stations_gdf : geopandas.GeoDataFrame
-        Station geometries, aligned with ds.space.
-    states : geopandas.GeoDataFrame
-        State polygons with a "STUSPS" column.
-    CLEAN_ORDER : list of str
-        Variables to clean, in order. Skipped if not in ds.
-    CONFIG_MAP : dict
-        Maps variable name to its filter config.
-    MASK_DEPENDENCIES : dict
-        Maps variable name to a parent variable whose mask should be OR'd in.
-
-    Returns
-    -------
-    xr.Dataset
-        Regional subset of ds with cleaned variables. Space is reindexed to
-        a 0-based integer range.
-    """
-    print(region)
-    region_states = states[states["STUSPS"].isin(state_list)]
-    region_polygon = region_states.unary_union
-    mask = stations_gdf.geometry.within(
-        region_polygon
-    )  # returns a boolean Series
-
-    ds_region = ds.isel(space=mask.values)
-    ds_region = ds_region.assign_coords(
-        space=np.arange(ds_region.sizes["space"])
-    )  # index for region
-    mask_cache = {}
-
-    ds_region_cleaned = ds_region.copy()
-
-    for name in CLEAN_ORDER:
-        if name not in ds_region.data_vars:
-            continue
-        da = ds_region[name].transpose("time", "space", transpose_coords=True)
-
-        var_config = CONFIG_MAP.get(name)
-        if var_config is None:
-            continue
-
-        var_config = dict(var_config)
-
-        var_config = resolve_run_on_other_da(var_config, ds_region)
-
-        cleaned, var_final_mask, _ = run_filter_bank(da, var_config)
-
-        # Combine with dependency mask if it exists
-        if name in MASK_DEPENDENCIES:
-            dependent_var = MASK_DEPENDENCIES[name]
-            if dependent_var not in mask_cache:
-                raise ValueError(
-                    f"Dependency {dependent_var} not found in "
-                    f"mask_cache for {name}",
-                )
-            final_mask = var_final_mask | mask_cache[dependent_var]
-            cleaned = da.where(~final_mask, np.nan)
-        else:
-            final_mask = var_final_mask
-
-        mask_cache[name] = final_mask
-
-        ds_region_cleaned[name] = cleaned.transpose(
-            "time", "space", transpose_coords=True
-        )
-
-    return ds_region_cleaned
-
-
-def _apply_filters(da, stage_config, filter_masks):
-    """Run a stage of filters, returning the combined mask for this stage.
-
-    Parameters
-    ----------
-    da : xr.DataArray
-        2D array with coordinates ("time", "space") for multiple observation
-        stations in a given region for a single variable
-    stage_config : dict
-        Dictionary of format {filter_function: {kwarg: value}} such that all of
-        the requested "filter_function(s)" will be run on ``da`` and
-        kwarg/value will be passed in as arguments to the function.
-    filter_masks : dict
-        Dictionary to be updated with the masks output by each filter function.
-
-    Returns
-    -------
-    stage_mask : xr.DataArray
-        Mask showing which values are bad (True where bad) in ANY filters from
-        this stage.
-    """
-    stage_mask = False
-    for fun, kwargs in stage_config.items():
-        if not isinstance(kwargs, list):
-            kwargs = [kwargs]
-        for kwarg in kwargs:
-            _, mask = fun(da.copy(), **kwarg)
-            filter_masks[fun] = filter_masks.get(fun, [])
-            filter_masks[fun].append(mask)
-            stage_mask |= mask
-    return stage_mask
-
-
-def run_filter_bank(da, var_config):
-    """Run a set of filters on a collection of observation stations in a
-    single region for a single variable. The filter banks are combined such
-    that each filter is run on the raw input data separately and then
-    observations that fail ANY of the filters is set to NaN
-
-    Parameters
-    ----------
-    da : xr.DataArray
-        2D array with coordinates ("time", "space") for multiple observation
-        stations in a given region for a single variable
-    var_config : dict
-        Dictionary of format {filter_function: {kwarg: value}} such that all of
-        the requested "filter_function(s)" will be run on ``da`` and
-        kwarg/value will be passed in as arguments to the function. If a
-        ``'config_2'`` or ``'config_3'`` key is included in the config,
-        those filters will be run on cleaned data after the initial filters
-        have been applied.
-
-    Returns
-    -------
-    da : xr.DataArray
-        Same as input but cleaned!
-    final_mask : xr.DataArray
-        Mask showing which values are bad (True where bad) in ANY of the
-        filters that were run. Same dimensionality as da.
-    filter_masks : dict
-        Dictionary with the same keys as config and values as the masks output
-        by each respective filter
-    """
-    stage_1 = var_config.get("stage_1", {})
-    stage_2 = var_config.get("stage_2", {})
-    stage_3 = var_config.get("stage_3", {})
-
-    final_mask = False
-    filter_masks = {}
-
-    final_mask |= _apply_filters(da, stage_1, filter_masks)
-    da = da.where(~final_mask, np.nan)
-
-    final_mask |= _apply_filters(da, stage_2, filter_masks)
-    da = da.where(~final_mask, np.nan)
-
-    final_mask |= _apply_filters(da, stage_3, filter_masks)
-    da = da.where(~final_mask, np.nan)
-
-    return da, final_mask, filter_masks
-
-
-MASK_DEPENDENCIES = {
-    "winddirection_10m": "windspeed_10m",
-    "windgust_10m": "windspeed_10m",
-}
-
-CLEAN_ORDER = [
-    "windspeed_10m",
-    "winddirection_10m",
-    "windgust_10m",
-    "temperature_2m",
-    "relativehumidity_2m",
-]
-
-CONFIG_WS10M = {
-    "stage_1": {
-        filter_completeness: dict(
-            completeness=8, window=8760, station_frac=None
-        ),
-        filter_spike_groups: dict(
-            N=3, value_thresh=20, up_thresh=20, down_thresh=20, nan_spikes=True
-        ),
-        filter_spikes: dict(diff_threshold=20, ex_percentile=1),
-        filter_value_range: dict(lower=0, upper=50),
-        filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=4),
-        filter_constant: dict(value=None),
-        filter_percentile: [
-            dict(
-                percentile=10,
-                method="median",
-                nstd=6,
-                threshold=None,
-                direction="greater",
-            ),
-            dict(percentile=95, nstd=None, threshold=1, direction="less"),
-        ],
-        filter_run_on_other_da: [
-            dict(
-                run_on_da="abs_diff_windspeed_10m",
-                base_filter=filter_changepoint,
-                base_filter_kwargs=dict(
-                    percentile=50,
-                    threshold=8,
-                    direction="greater",
-                    pen=300,
-                    jump=20,
-                    min_size=168,
-                ),
-                apply_to="both",
-            ),
-            dict(
-                run_on_da="abs_diff_windspeed_10m",
-                base_filter=filter_error,
-                base_filter_kwargs=dict(threshold=12.9),
-                apply_to="both",
-            ),
-        ],
-    },
-    "stage_2": {
-        filter_run_on_other_da: dict(
-            run_on_da="abs_diff_windspeed_10m",
-            base_filter=filter_mean,
-            base_filter_kwargs=dict(threshold=8, direction="greater"),
-            apply_to="run_on_da",
-        ),
-        filter_spikes: dict(diff_threshold=20, ex_percentile=1),
-        filter_spike_groups: dict(
-            N=3, value_thresh=20, up_thresh=20, down_thresh=20, nan_spikes=True
-        ),
-    },
-    "stage_3": {
-        filter_completeness: dict(
-            completeness=50, window=24, station_frac=None
-        ),
-    },
-}
-
-"""Config for run_filter_bank to clean 10-meter windspeed.
-Upper limit of based on regional maximum official wind gust of 50 m/s
-(Colline et al. 2024a).Ex-percentile of 1 to retain extreme windspeed events.
-Linear interpolation is used to fill 2 data points, so maximum linear gap is
-set to 4.
-P10 median + 6 MAD = 3.16, reomving 21 statoins in the COWY region"""
-
-CONFIG_WDIR10M = {
-    "stage_1": {
-        filter_completeness: dict(
-            completeness=8, window=8760, station_frac=None
-        ),
-        filter_value_range: dict(lower=0, upper=360),
-        filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=4),
-        filter_constant: dict(value=None),
-    },
-    "stage_2": {
-        filter_completeness: dict(
-            completeness=50, window=24, station_frac=None
-        ),
-    },
-}
-"""Config for run_filter_bank to clean 10-meter wind direction."""
-
-CONFIG_GUST10M = {
-    "stage_1": {
-        filter_completeness: dict(
-            completeness=8, window=8760, station_frac=None
-        ),
-        filter_spikes: dict(diff_threshold=20, ex_percentile=1),
-        filter_spike_groups: dict(
-            N=3, value_thresh=20, up_thresh=20, down_thresh=20, nan_spikes=True
-        ),
-        filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=4),
-        filter_percentile: [
-            dict(
-                percentile=10,
-                method="median",
-                nstd=8,
-                threshold=None,
-                direction="greater",
-            ),
-            dict(percentile=95, nstd=None, threshold=2, direction="less"),
-        ],
-        filter_value_range: dict(lower=0, upper=103),
-        filter_constant: dict(value=None),
-        filter_run_on_other_da: [
-            dict(
-                run_on_da="abs_diff_windgust_10m",
-                base_filter=filter_changepoint,
-                base_filter_kwargs=dict(
-                    percentile=50,
-                    threshold=8,
-                    direction="greater",
-                    pen=300,
-                    jump=20,
-                    min_size=168,
-                ),
-                apply_to="both",
-            ),
-            dict(
-                run_on_da="abs_diff_windgust_10m",
-                base_filter=filter_error,
-                base_filter_kwargs=dict(threshold=14.1),
-                apply_to="both",
-            ),
-        ],
-    },
-    "stage_2": {
-        filter_run_on_other_da: dict(
-            run_on_da="abs_diff_windgust_10m",
-            base_filter=filter_mean,
-            base_filter_kwargs=dict(threshold=8.5, direction="greater"),
-            apply_to="run_on_da",
-        ),
-        filter_spikes: dict(diff_threshold=20, ex_percentile=1),
-        filter_spike_groups: dict(
-            N=3, value_thresh=20, up_thresh=20, down_thresh=20, nan_spikes=True
-        ),
-    },
-    "stage_3": {
-        filter_completeness: dict(
-            completeness=50, window=24, station_frac=None
-        ),
-    },
-}
-"""Config for run_filter_bank to clean 10-meter wind gusts.
-Upper limit of based on regional maximum official wind gust of 103 m/s.
-Ex-percentile of 1 to retain extreme windspeed events."""
-
-
-CONFIG_T2M = {
-    "stage_1": {
-        filter_completeness: dict(
-            completeness=8, window=8760, station_frac=None
-        ),
-        filter_spikes: dict(diff_threshold=15, ex_percentile=2),
-        filter_constant: dict(value=None),
-        filter_linear_gaps: dict(diff_threshold=0.05, n_threshold=4),
-        filter_value_range: dict(lower=-60, upper=60),
-        filter_run_on_other_da: [
-            dict(
-                run_on_da="abs_diff_temperature_2m",
-                base_filter=filter_changepoint,
-                base_filter_kwargs=dict(
-                    percentile=50,
-                    threshold=10,
-                    direction="greater",
-                    pen=300,
-                    jump=20,
-                    min_size=24,
-                ),
-                apply_to="both",
-            ),
-            dict(
-                run_on_da="abs_diff_temperature_2m",
-                base_filter=filter_error,
-                base_filter_kwargs=dict(threshold=8.5),
-                apply_to="both",
-            ),
-        ],
-    },
-    "stage_2": {
-        filter_run_on_other_da: dict(
-            run_on_da="abs_diff_temperature_2m",
-            base_filter=filter_mean,
-            base_filter_kwargs=dict(threshold=8.5, direction="greater"),
-            apply_to="run_on_da",
-        ),
-        filter_spikes: dict(diff_threshold=15, ex_percentile=2),
-    },
-    "stage_3": {
-        filter_completeness: dict(
-            completeness=50, window=24, station_frac=None
-        ),
-    },
-}
-
-"""Config for ``run_filter_bank`` to clean near-surface 2-meter temperature."""
-
-CONFIG_RH2M = {
-    "stage_1": {
-        filter_completeness: dict(
-            completeness=8, window=8760, station_frac=None
-        ),
-        filter_value_range: dict(lower=0, upper=100),
-        filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=4),
-        filter_constant: dict(value=None),
-        filter_run_on_other_da: [
-            dict(
-                run_on_da="abs_diff_relativehumidity_2m",
-                base_filter=filter_changepoint,
-                base_filter_kwargs=dict(
-                    percentile=50,
-                    threshold=30,
-                    direction="greater",
-                    pen=300,
-                    jump=20,
-                    min_size=168,
-                ),
-                apply_to="both",
-            ),
-            dict(
-                run_on_da="abs_diff_relativehumidity_2m",
-                base_filter=filter_error,
-                base_filter_kwargs=dict(threshold=56),
-                apply_to="both",
-            ),
-        ],
-    },
-    "stage_2": {
-        filter_run_on_other_da: dict(
-            run_on_da="abs_diff_relativehumidity_2m",
-            base_filter=filter_mean,
-            base_filter_kwargs=dict(threshold=25, direction="greater"),
-            apply_to="run_on_da",
-        ),
-    },
-    "stage_3": {
-        filter_completeness: dict(
-            completeness=50, window=24, station_frac=None
-        ),
-    },
-}
-
-"""Config for ``run_filter_bank`` to clean near-surface 2-meter relative
-humidity. """
