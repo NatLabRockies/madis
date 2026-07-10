@@ -1,7 +1,5 @@
 """Preprocessing functions for MADIS observational data and HRRR"""
 
-#add_abs_diff
-
 import xarray as xr
 import numpy as np
 import pandas as pd
