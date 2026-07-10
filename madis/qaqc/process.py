@@ -135,8 +135,6 @@ def process_region(
         if var_config is None:
             continue
 
-        # var_config = dict(var_config)
-
         var_config = resolve_run_on_other_da(var_config, ds_region)
 
         cleaned, var_final_mask, _ = run_filter_bank(da, var_config)
@@ -242,3 +240,29 @@ def run_filter_bank(da, var_config):
         da = da.where(~stage_mask, np.nan)
 
     return da, final_mask, filter_masks
+
+def get_region_ds(ds, region_polygon):
+    """Subset ds to stations within the given region_polygon.
+
+    Parameters
+    ----------
+    ds : xr.Dataset
+        Observation dataset with dims ("time", "space").
+    region_polygon : shapely.geometry.Polygon
+        Polygon defining the region to subset to.
+
+    Returns
+    -------
+    xr.Dataset
+        Subset of ds containing only stations within the region_polygon.
+        Space is reindexed to a 0-based integer range.
+
+    """
+    stations_gdf = gpd.GeoDataFrame(
+        geometry=gpd.points_from_xy(ds["longitude"].values, ds["latitude"].values),
+        crs="EPSG:4326",
+    )
+    mask = stations_gdf.geometry.within(region_polygon)
+    ds_region = ds.isel(space=mask.values)
+    ds_region = ds_region.assign_coords(space=np.arange(ds_region.sizes["space"]))
+    return ds_region
