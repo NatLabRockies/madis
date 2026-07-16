@@ -46,7 +46,7 @@ jobs:
           DEFAULT_BRANCH: origin/main
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LINTER_RULES_PATH: /
-          FILTER_REGEX_INCLUDE: madis/*
+          FILTER_REGEX_INCLUDE: .*madis/.*\.py$
 
   ruff:
     name: Ruff
@@ -56,5 +56,5 @@ jobs:
       - uses: chartboost/ruff-action@v1
         with:
           version: 0.4.6
-          args: check
+          args: check --extend-exclude=*.ipynb
           src: "./madis"
