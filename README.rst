@@ -1,6 +1,6 @@
-*************************
-MADIS Downloader Package
-*************************
+**************************************
+NLR Data Processing Pipeline for MADIS
+**************************************
 
 Designed to handle the following steps
 --------------------------------------
