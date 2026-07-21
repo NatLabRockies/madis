@@ -259,10 +259,13 @@ def get_region_ds(ds, region_polygon):
 
     """
     stations_gdf = gpd.GeoDataFrame(
-        geometry=gpd.points_from_xy(ds["longitude"].values, ds["latitude"].values),
+        geometry=gpd.points_from_xy(
+            ds["longitude"].values, ds["latitude"].values),
         crs="EPSG:4326",
     )
     mask = stations_gdf.geometry.within(region_polygon)
     ds_region = ds.isel(space=mask.values)
-    ds_region = ds_region.assign_coords(space=np.arange(ds_region.sizes["space"]))
+    ds_region = ds_region.assign_coords(
+        space=np.arange(ds_region.sizes["space"])
+    )
     return ds_region
