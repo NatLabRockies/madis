@@ -60,7 +60,7 @@ CONFIG_WS10M = [
             dict(
                 run_on_da="abs_diff_windspeed_10m",
                 base_filter=filter_error,
-                base_filter_kwargs=dict(threshold=12.9),
+                base_filter_kwargs=dict(threshold=45),
                 apply_to="both",
             ),
         ],
@@ -143,7 +143,7 @@ CONFIG_GUST10M = [
             dict(
                 run_on_da="abs_diff_windgust_10m",
                 base_filter=filter_error,
-                base_filter_kwargs=dict(threshold=14.1),
+                base_filter_kwargs=dict(threshold=43),
                 apply_to="both",
             ),
         ],

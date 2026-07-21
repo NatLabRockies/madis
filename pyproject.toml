@@ -36,6 +36,7 @@ dependencies = [
   "xarray>=2023.0",
   "ruptures>=1.1.10",
   "geopandas>=1.1.0",
+  "scipy>=1.16.0",
 ]
 
 [project.urls]
