@@ -152,7 +152,7 @@ CONFIG_GUST10M = [
         filter_run_on_other_da: dict(
             run_on_da="abs_diff_windgust_10m",
             base_filter=filter_mean,
-            base_filter_kwargs=dict(threshold=8.5, direction="greater"),
+            base_filter_kwargs=dict(threshold=13, direction="greater"),
             apply_to="run_on_da",
         ),
         filter_spikes: dict(diff_threshold=20, ex_percentile=1),
