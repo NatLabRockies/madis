@@ -90,9 +90,7 @@ def filter_linear_gaps(da, diff_threshold=1e-4, n_threshold=3):
 
         groups = (~extended_mask).cumsum()
         groups[~extended_mask] = 0  # Valid diff values
-        unique_groups, group_counts = np.unique(
-            groups[groups > 0], return_counts=True
-            )
+        unique_groups, group_counts = np.unique(groups[groups > 0], return_counts=True)
         size_map = dict(zip(unique_groups, group_counts))
         long_lines = np.vectorize(lambda g: size_map.get(g, 0) >= n_threshold)
         long_lines = long_lines(groups)
@@ -158,9 +156,8 @@ def filter_spikes(da, diff_threshold=15, ex_percentile=2):
         )
 
         top_p = 100 - ex_percentile
-        extreme_compressed = (
-            (valid_values > np.nanpercentile(valid_values, top_p))
-            | (valid_values < np.nanpercentile(valid_values, ex_percentile))
+        extreme_compressed = (valid_values > np.nanpercentile(valid_values, top_p)) | (
+            valid_values < np.nanpercentile(valid_values, ex_percentile)
         )
 
         bad_compressed = spike_mask_compressed & extreme_compressed
@@ -475,17 +472,11 @@ def filter_percentile(
     _preflight(da)
 
     if not 0 <= percentile <= 100:
-        raise ValueError(
-            f"percentile must be between 0 and 100, got {percentile}"
-        )
+        raise ValueError(f"percentile must be between 0 and 100, got {percentile}")
     if direction not in ("greater", "less"):
-        raise ValueError(
-            f"direction must be 'greater' or 'less', got {direction}"
-            )
+        raise ValueError(f"direction must be 'greater' or 'less', got {direction}")
 
-    percentile_per_station = da.quantile(percentile / 100.0,
-                                         dim="time",
-                                         skipna=True)
+    percentile_per_station = da.quantile(percentile / 100.0, dim="time", skipna=True)
 
     if threshold is not None:
         mode_msg = "fixed"
@@ -493,13 +484,10 @@ def filter_percentile(
         mean_p = percentile_per_station.mean().values
         std_p = float(percentile_per_station.std(skipna=True).values)
         threshold = (
-            mean_p + nstd * std_p
-            if direction == "greater"
-            else mean_p - nstd * std_p
+            mean_p + nstd * std_p if direction == "greater" else mean_p - nstd * std_p
         )
         mode_msg = (
-            f"network-based (mean={mean_p:.2f},"
-            f" std={std_p:.2f}, nstd={nstd})"
+            f"network-based (mean={mean_p:.2f}," f" std={std_p:.2f}, nstd={nstd})"
         )
     elif method == "median":
         median_p = percentile_per_station.median().values
@@ -570,9 +558,7 @@ def filter_mean(da, threshold, direction="greater"):
 
     _preflight(da)
     if direction not in ("greater", "less"):
-        raise ValueError(
-            f"direction must be 'greater' or 'less', got {direction}"
-        )
+        raise ValueError(f"direction must be 'greater' or 'less', got {direction}")
 
     mean_per_station = da.mean(dim="time", skipna=True)
     flagged = (
@@ -669,9 +655,7 @@ def filter_completeness(da, completeness=80, window=24, station_frac=None):
     for idx in da["space"]:
         ida = da[:, idx]
         rolling_non_na = (
-            ida.notnull().rolling(time=window,
-                                  center=True,
-                                  min_periods=1).sum()
+            ida.notnull().rolling(time=window, center=True, min_periods=1).sum()
         )
         ibad_mask = (rolling_non_na < min_non_na).values
         ida[ibad_mask] = np.nan
@@ -857,13 +841,9 @@ def filter_changepoint(
     da = da.compute()
     _preflight(da)
     if not 0 <= percentile <= 100:
-        raise ValueError(
-            f"percentile must be between 0 and 100, got {percentile}"
-            )
+        raise ValueError(f"percentile must be between 0 and 100, got {percentile}")
     if direction not in ("greater", "less"):
-        raise ValueError(
-            f"direction must be 'greater' or 'less', got {direction}"
-            )
+        raise ValueError(f"direction must be 'greater' or 'less', got {direction}")
     if threshold is None and nstd is None:
         raise ValueError("Must provide either threshold or nstd")
     bad_mask = da.copy().astype(bool)
@@ -877,13 +857,10 @@ def filter_changepoint(
         mean_p = float(percentile_per_station.mean().values)
         std_p = float(percentile_per_station.std().values)
         threshold = (
-            mean_p + nstd * std_p
-            if direction == "greater"
-            else mean_p - nstd * std_p
+            mean_p + nstd * std_p if direction == "greater" else mean_p - nstd * std_p
         )
         mode_msg = (
-            f"network-based (mean={mean_p:.2f}, "
-            f"std={std_p:.2f}, nstd={nstd})"
+            f"network-based (mean={mean_p:.2f}, " f"std={std_p:.2f}, nstd={nstd})"
         )
     else:
         mode_msg = "fixed"

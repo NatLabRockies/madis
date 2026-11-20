@@ -4,6 +4,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 from copy import deepcopy
+from madis.qaqc.flags import flag_key, flag_var_name, build_flag
 from madis.qaqc.filters import filter_run_on_other_da
 from madis.qaqc.configs import CONFIG_MAP, CLEAN_ORDER, MASK_DEPENDENCIES
 
@@ -88,16 +89,16 @@ def process_region(
     Returns
     -------
     xr.Dataset
-        Regional subset of ds with cleaned variables. Space is reindexed to
-        a 0-based integer range.
+        Regional subset of ds with cleaned variables and a uint16=
+        ``<var>_qc_flag`` bitmask for each cleaned variable .
+        Space is reindexed to a 0-based integer range.
     """
 
     if region_polygon is not None:
         for coord in ("latitude", "longitude"):
             if coord not in ds and coord not in ds.coords:
                 raise KeyError(
-                    f"ds must contain '{coord}' "
-                    "as a data variable or coordinate."
+                    f"ds must contain '{coord}' " "as a data variable or coordinate."
                 )
             if "space" not in ds[coord].dims:
                 raise ValueError(
@@ -105,20 +106,13 @@ def process_region(
                     f"got dims {tuple(ds[coord].dims)}."
                 )
         stations_gdf = gpd.GeoDataFrame(
-            pd.DataFrame({
-                "lon": ds["longitude"].values,
-                "lat": ds["latitude"].values
-                }),
-            geometry=gpd.points_from_xy(
-                ds["longitude"].values,
-                ds["latitude"].values),
+            pd.DataFrame({"lon": ds["longitude"].values, "lat": ds["latitude"].values}),
+            geometry=gpd.points_from_xy(ds["longitude"].values, ds["latitude"].values),
             crs="EPSG:4326",
         )
         mask = stations_gdf.geometry.within(region_polygon)
         ds_region = ds.isel(space=mask.values)
-        ds_region = ds_region.assign_coords(
-            space=np.arange(ds_region.sizes["space"])
-            )
+        ds_region = ds_region.assign_coords(space=np.arange(ds_region.sizes["space"]))
     else:
         ds_region = ds
 
@@ -137,9 +131,10 @@ def process_region(
 
         var_config = resolve_run_on_other_da(var_config, ds_region)
 
-        cleaned, var_final_mask, _ = run_filter_bank(da, var_config)
+        cleaned, var_final_mask, filter_masks = run_filter_bank(da, var_config)
 
         # Combine with dependency mask if it exists
+        parent_mask = None
         if name in mask_dependencies:
             dependent_var = mask_dependencies[name]
             if dependent_var not in mask_cache:
@@ -147,7 +142,8 @@ def process_region(
                     f"Dependency {dependent_var} not found in "
                     f"mask_cache for {name}",
                 )
-            final_mask = var_final_mask | mask_cache[dependent_var]
+            parent_mask = mask_cache[dependent_var]
+            final_mask = var_final_mask | parent_mask
             # apply the combined mask to the cleaned data
             cleaned = cleaned.where(~final_mask, np.nan)
         else:
@@ -158,11 +154,14 @@ def process_region(
         ds_region_cleaned[name] = cleaned.transpose(
             "time", "space", transpose_coords=True
         )
+        ds_region_cleaned[flag_var_name(name)] = build_flag(
+            da, filter_masks, parent_mask
+        )
 
     return ds_region_cleaned
 
 
-def _apply_filters(da, stage_config, filter_masks):
+def _apply_filters(da, stage_config, filter_masks, stage = 0):
     """Run a stage of filters, returning the combined mask for this stage.
 
     Parameters
@@ -175,7 +174,11 @@ def _apply_filters(da, stage_config, filter_masks):
         the requested "filter_function(s)" will be run on ``da`` and
         kwarg/value will be passed in as arguments to the function.
     filter_masks : dict
-        Dictionary to be updated with the masks output by each filter function.
+        Dictionary to be updated with the masks output by each filter
+        function, keyed by QC flag name (see ``flags.flag_key``).
+    stage : int, default 0
+        0-based index of this stage in the variable's config. Used to
+        separate initial and final completeness flags.
 
     Returns
     -------
@@ -189,8 +192,9 @@ def _apply_filters(da, stage_config, filter_masks):
             kwargs = [kwargs]
         for kwarg in kwargs:
             _, mask = fun(da.copy(), **kwarg)
-            filter_masks[fun] = filter_masks.get(fun, [])
-            filter_masks[fun].append(mask)
+            key = flag_key(fun, kwarg, stage)
+            filter_masks[key] = filter_masks.get(key, [])
+            filter_masks[key].append(mask)
             stage_mask |= mask
     return stage_mask
 
@@ -222,10 +226,10 @@ def run_filter_bank(da, var_config):
         Mask showing which values are bad (True where bad) in ANY of the
         filters that were run. Same dimensionality as da.
     filter_masks : dict
-        Dictionary mapping each filter function to a list of masks produced
-        by that filter across all stages. If a filter is run multiple times
-        (across stages or with multiple kwarg dicts), all resulting masks are
-        appended to the same list.
+        Dictionary mapping each QC flag name (see ``flags.flag_key``) to a
+        list of masks produced under that name across all stages. If a
+        filter is run multiple times, all resulting masks are appended to
+        the same list.
     """
 
     filter_masks = {}
@@ -234,12 +238,13 @@ def run_filter_bank(da, var_config):
     if isinstance(var_config, dict):
         var_config = [var_config]
 
-    for stage_config in var_config:
-        stage_mask = _apply_filters(da, stage_config, filter_masks)
+    for stage, stage_config in enumerate(var_config):
+        stage_mask = _apply_filters(da, stage_config, filter_masks, stage)
         final_mask |= stage_mask
         da = da.where(~stage_mask, np.nan)
 
     return da, final_mask, filter_masks
+
 
 def get_region_ds(ds, region_polygon):
     """Subset ds to stations within the given region_polygon.
@@ -259,13 +264,10 @@ def get_region_ds(ds, region_polygon):
 
     """
     stations_gdf = gpd.GeoDataFrame(
-        geometry=gpd.points_from_xy(
-            ds["longitude"].values, ds["latitude"].values),
+        geometry=gpd.points_from_xy(ds["longitude"].values, ds["latitude"].values),
         crs="EPSG:4326",
     )
     mask = stations_gdf.geometry.within(region_polygon)
     ds_region = ds.isel(space=mask.values)
-    ds_region = ds_region.assign_coords(
-        space=np.arange(ds_region.sizes["space"])
-    )
+    ds_region = ds_region.assign_coords(space=np.arange(ds_region.sizes["space"]))
     return ds_region

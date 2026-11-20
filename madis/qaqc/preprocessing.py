@@ -28,6 +28,7 @@ def calc_windspeed(
     assert wind_v.shape == wind_u.shape, "arguments have mismatched shape"
     return np.hypot(wind_u, wind_v)
 
+
 def calc_winddirection(
     wind_v: np.ndarray | xr.DataArray,
     wind_u: np.ndarray | xr.DataArray,
@@ -50,6 +51,7 @@ def calc_winddirection(
     assert wind_v.shape == wind_u.shape, "arguments have mismatched shape"
     deg_north = np.degrees(np.arctan2(-wind_u, -wind_v)) % 360
     return deg_north
+
 
 def mask_stations(
     ds: xr.Dataset,
@@ -82,6 +84,7 @@ def mask_stations(
         & (lon_obs <= lon_bounds[1])
     )
     return ds.isel(space=mask)
+
 
 def read_madis(
     file_paths: list[str],
@@ -138,6 +141,7 @@ def read_madis(
 
     return xr.merge(var_datasets, compat="override", join="outer")
 
+
 def subset_grid_to_point_xy(
     ds: xr.Dataset,
     point_ds: xr.Dataset,
@@ -190,7 +194,7 @@ def subset_grid_to_point_xy(
 
     grid_subset = ds.isel(y=nearest_y, x=nearest_x)
 
-    #lat lon become the true station coordinates
+    # lat lon become the true station coordinates
     grid_subset = grid_subset.assign_coords(
         space=np.arange(point_ds.sizes["space"]),
         latitude=("space", point_ds["latitude"].values),
@@ -198,6 +202,7 @@ def subset_grid_to_point_xy(
     )
 
     return grid_subset
+
 
 def forecast_obs_merge(
     ds1: xr.Dataset,
@@ -255,9 +260,7 @@ def forecast_obs_merge(
 
     """
     # Find common times and subset
-    common_times = np.intersect1d(
-        ds1[ds1_timevar].values, ds2[ds2_timevar].values
-    )
+    common_times = np.intersect1d(ds1[ds1_timevar].values, ds2[ds2_timevar].values)
 
     if len(common_times) == 0:
         raise ValueError(
@@ -281,9 +284,7 @@ def forecast_obs_merge(
             "time": ds1_subset["time"],
             "space": ds1_subset["space"],
             **{
-                k: v
-                for k, v in ds1_subset.coords.items()
-                if k not in ["time", "space"]
+                k: v for k, v in ds1_subset.coords.items() if k not in ["time", "space"]
             },
         }
     )
@@ -300,6 +301,7 @@ def forecast_obs_merge(
     merged = merged.copy()
 
     return merged
+
 
 def add_abs_diff(
     ds: xr.Dataset,

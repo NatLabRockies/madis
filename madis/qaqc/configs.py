@@ -1,9 +1,18 @@
 """Custom QA/QC configurations for MADIS observational data across CONUS"""
 
-from madis.qaqc.filters import filter_completeness, filter_spikes, \
-    filter_spike_groups, filter_value_range, \
-    filter_linear_gaps, filter_constant, filter_percentile, \
-    filter_changepoint, filter_error, filter_mean, filter_run_on_other_da
+from madis.qaqc.filters import (
+    filter_completeness,
+    filter_spikes,
+    filter_spike_groups,
+    filter_value_range,
+    filter_linear_gaps,
+    filter_constant,
+    filter_percentile,
+    filter_changepoint,
+    filter_error,
+    filter_mean,
+    filter_run_on_other_da,
+)
 
 MASK_DEPENDENCIES = {
     "winddirection_10m": "windspeed_10m",
@@ -22,10 +31,8 @@ CLEAN_ORDER = [
 applied to all wind variables"""
 
 CONFIG_WS10M = [
-    { # stage 1
-        filter_completeness: dict(
-            completeness=8, window=8760, station_frac=None
-        ),
+    {  # stage 1
+        filter_completeness: dict(completeness=8, window=8760, station_frac=None),
         filter_spike_groups: dict(
             N=3, value_thresh=20, up_thresh=20, down_thresh=20, nan_spikes=True
         ),
@@ -65,7 +72,7 @@ CONFIG_WS10M = [
             ),
         ],
     },
-    { # stage 2
+    {  # stage 2
         filter_run_on_other_da: dict(
             run_on_da="abs_diff_windspeed_10m",
             base_filter=filter_mean,
@@ -77,10 +84,8 @@ CONFIG_WS10M = [
             N=3, value_thresh=20, up_thresh=20, down_thresh=20, nan_spikes=True
         ),
     },
-    { # stage 3
-        filter_completeness: dict(
-            completeness=50, window=24, station_frac=None
-        ),
+    {  # stage 3
+        filter_completeness: dict(completeness=50, window=24, station_frac=None),
     },
 ]
 """Config for run_filter_bank to clean near-surface wind speed.
@@ -88,27 +93,21 @@ CONFIG_WS10M = [
 10-m windspeed using nearest-neighbor interpolation."""
 
 CONFIG_WDIR10M = [
-    { # stage 1
-        filter_completeness: dict(
-            completeness=8, window=8760, station_frac=None
-        ),
+    {  # stage 1
+        filter_completeness: dict(completeness=8, window=8760, station_frac=None),
         filter_value_range: dict(lower=0, upper=360),
         filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=4),
         filter_constant: dict(value=None),
     },
-    { # stage 2
-        filter_completeness: dict(
-            completeness=50, window=24, station_frac=None
-        ),
+    {  # stage 2
+        filter_completeness: dict(completeness=50, window=24, station_frac=None),
     },
 ]
 """Config for run_filter_bank to clean near-surface wind direction."""
 
 CONFIG_GUST10M = [
-    { # stage 1
-        filter_completeness: dict(
-            completeness=8, window=8760, station_frac=None
-        ),
+    {  # stage 1
+        filter_completeness: dict(completeness=8, window=8760, station_frac=None),
         filter_spikes: dict(diff_threshold=20, ex_percentile=1),
         filter_spike_groups: dict(
             N=3, value_thresh=20, up_thresh=20, down_thresh=20, nan_spikes=True
@@ -148,7 +147,7 @@ CONFIG_GUST10M = [
             ),
         ],
     },
-    { # stage 2
+    {  # stage 2
         filter_run_on_other_da: dict(
             run_on_da="abs_diff_windgust_10m",
             base_filter=filter_mean,
@@ -160,10 +159,8 @@ CONFIG_GUST10M = [
             N=3, value_thresh=20, up_thresh=20, down_thresh=20, nan_spikes=True
         ),
     },
-    { # stage 3
-        filter_completeness: dict(
-            completeness=50, window=24, station_frac=None
-        ),
+    {  # stage 3
+        filter_completeness: dict(completeness=50, window=24, station_frac=None),
     },
 ]
 """Config for run_filter_bank to clean near-surface wind gusts.
@@ -173,10 +170,8 @@ Ex-percentile of 1 to retain extreme wind events.
 10-m windgust using nearest-neighbor interpolation."""
 
 CONFIG_T2M = [
-    { # stage 1
-        filter_completeness: dict(
-            completeness=8, window=8760, station_frac=None
-        ),
+    {  # stage 1
+        filter_completeness: dict(completeness=8, window=8760, station_frac=None),
         filter_spikes: dict(diff_threshold=15, ex_percentile=2),
         filter_constant: dict(value=None),
         filter_linear_gaps: dict(diff_threshold=0.05, n_threshold=4),
@@ -203,7 +198,7 @@ CONFIG_T2M = [
             ),
         ],
     },
-    { # stage 2
+    {  # stage 2
         filter_run_on_other_da: dict(
             run_on_da="abs_diff_temperature_2m",
             base_filter=filter_mean,
@@ -212,10 +207,8 @@ CONFIG_T2M = [
         ),
         filter_spikes: dict(diff_threshold=15, ex_percentile=2),
     },
-    { # stage 3
-        filter_completeness: dict(
-            completeness=50, window=24, station_frac=None
-        ),
+    {  # stage 3
+        filter_completeness: dict(completeness=50, window=24, station_frac=None),
     },
 ]
 """Config for ``run_filter_bank`` to clean near-surface temperature.
@@ -223,10 +216,8 @@ CONFIG_T2M = [
 2-m temperature using nearest-neighbor interpolation."""
 
 CONFIG_RH2M = [
-    { # stage 1
-        filter_completeness: dict(
-            completeness=8, window=8760, station_frac=None
-        ),
+    {  # stage 1
+        filter_completeness: dict(completeness=8, window=8760, station_frac=None),
         filter_value_range: dict(lower=0, upper=100),
         filter_linear_gaps: dict(diff_threshold=1e-4, n_threshold=4),
         filter_constant: dict(value=None),
@@ -252,7 +243,7 @@ CONFIG_RH2M = [
             ),
         ],
     },
-    { #stage 2
+    {  # stage 2
         filter_run_on_other_da: dict(
             run_on_da="abs_diff_relativehumidity_2m",
             base_filter=filter_mean,
@@ -260,10 +251,8 @@ CONFIG_RH2M = [
             apply_to="run_on_da",
         ),
     },
-    { # stage 3
-        filter_completeness: dict(
-            completeness=50, window=24, station_frac=None
-        ),
+    {  # stage 3
+        filter_completeness: dict(completeness=50, window=24, station_frac=None),
     },
 ]
 
