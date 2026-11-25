@@ -968,7 +968,5 @@ def filter_run_on_other_da(
 
     if apply_to in ('da', 'both'):
         da = da.where(~mask, np.nan)
-    if apply_to in ('run_on_da', 'both'):
-        run_on_da[...] = run_on_da.where(~mask, np.nan)
 
     return da, mask

@@ -194,6 +194,7 @@ def _apply_filters(da, stage_config, filter_masks, stage=0):
         this stage.
     """
     stage_mask = False
+    run_on_da_updates = []
     for fun, kwargs in stage_config.items():
         if not isinstance(kwargs, list):
             kwargs = [kwargs]
@@ -203,6 +204,12 @@ def _apply_filters(da, stage_config, filter_masks, stage=0):
             filter_masks[key] = filter_masks.get(key, [])
             filter_masks[key].append(mask)
             stage_mask |= mask
+            if kwarg.get('apply_to') in ('run_on_da', 'both'):
+                run_on_da_updates.append((kwarg['run_on_da'], mask))
+
+    for run_on_da, mask in run_on_da_updates:
+        run_on_da[...] = run_on_da.where(~mask, np.nan)
+
     return stage_mask
 
 
