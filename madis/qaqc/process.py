@@ -42,15 +42,15 @@ def resolve_run_on_other_da(config, ds):
             resolved = []
             for kwargs in value:
                 kwargs = dict(kwargs)
-                kwargs["run_on_da"] = ds[kwargs["run_on_da"]].transpose(
-                    "time", "space", transpose_coords=True
+                kwargs['run_on_da'] = ds[kwargs['run_on_da']].transpose(
+                    'time', 'space', transpose_coords=True
                 )
                 resolved.append(kwargs)
             stage_cfg[filter_run_on_other_da] = resolved
         else:
             kwargs = dict(value)
-            kwargs["run_on_da"] = ds[kwargs["run_on_da"]].transpose(
-                "time", "space", transpose_coords=True
+            kwargs['run_on_da'] = ds[kwargs['run_on_da']].transpose(
+                'time', 'space', transpose_coords=True
             )
             stage_cfg[filter_run_on_other_da] = kwargs
         cfg[i] = stage_cfg
@@ -95,24 +95,31 @@ def process_region(
     """
 
     if region_polygon is not None:
-        for coord in ("latitude", "longitude"):
+        for coord in ('latitude', 'longitude'):
             if coord not in ds and coord not in ds.coords:
                 raise KeyError(
-                    f"ds must contain '{coord}' " "as a data variable or coordinate."
+                    f"ds must contain '{coord}' "
+                    'as a data variable or coordinate.'
                 )
-            if "space" not in ds[coord].dims:
+            if 'space' not in ds[coord].dims:
                 raise ValueError(
                     f"'{coord}' must have a 'space' dimension, "
-                    f"got dims {tuple(ds[coord].dims)}."
+                    f'got dims {tuple(ds[coord].dims)}.'
                 )
         stations_gdf = gpd.GeoDataFrame(
-            pd.DataFrame({"lon": ds["longitude"].values, "lat": ds["latitude"].values}),
-            geometry=gpd.points_from_xy(ds["longitude"].values, ds["latitude"].values),
-            crs="EPSG:4326",
+            pd.DataFrame(
+                {'lon': ds['longitude'].values, 'lat': ds['latitude'].values}
+            ),
+            geometry=gpd.points_from_xy(
+                ds['longitude'].values, ds['latitude'].values
+            ),
+            crs='EPSG:4326',
         )
         mask = stations_gdf.geometry.within(region_polygon)
         ds_region = ds.isel(space=mask.values)
-        ds_region = ds_region.assign_coords(space=np.arange(ds_region.sizes["space"]))
+        ds_region = ds_region.assign_coords(
+            space=np.arange(ds_region.sizes['space'])
+        )
     else:
         ds_region = ds
 
@@ -123,7 +130,7 @@ def process_region(
     for name in clean_order:
         if name not in ds_region.data_vars:
             continue
-        da = ds_region[name].transpose("time", "space", transpose_coords=True)
+        da = ds_region[name].transpose('time', 'space', transpose_coords=True)
 
         var_config = config_map.get(name)
         if var_config is None:
@@ -139,8 +146,8 @@ def process_region(
             dependent_var = mask_dependencies[name]
             if dependent_var not in mask_cache:
                 raise ValueError(
-                    f"Dependency {dependent_var} not found in "
-                    f"mask_cache for {name}",
+                    f'Dependency {dependent_var} not found in '
+                    f'mask_cache for {name}',
                 )
             parent_mask = mask_cache[dependent_var]
             final_mask = var_final_mask | parent_mask
@@ -152,7 +159,7 @@ def process_region(
         mask_cache[name] = final_mask
 
         ds_region_cleaned[name] = cleaned.transpose(
-            "time", "space", transpose_coords=True
+            'time', 'space', transpose_coords=True
         )
         ds_region_cleaned[flag_var_name(name)] = build_flag(
             da, filter_masks, parent_mask
@@ -161,7 +168,7 @@ def process_region(
     return ds_region_cleaned
 
 
-def _apply_filters(da, stage_config, filter_masks, stage = 0):
+def _apply_filters(da, stage_config, filter_masks, stage=0):
     """Run a stage of filters, returning the combined mask for this stage.
 
     Parameters
@@ -264,10 +271,14 @@ def get_region_ds(ds, region_polygon):
 
     """
     stations_gdf = gpd.GeoDataFrame(
-        geometry=gpd.points_from_xy(ds["longitude"].values, ds["latitude"].values),
-        crs="EPSG:4326",
+        geometry=gpd.points_from_xy(
+            ds['longitude'].values, ds['latitude'].values
+        ),
+        crs='EPSG:4326',
     )
     mask = stations_gdf.geometry.within(region_polygon)
     ds_region = ds.isel(space=mask.values)
-    ds_region = ds_region.assign_coords(space=np.arange(ds_region.sizes["space"]))
+    ds_region = ds_region.assign_coords(
+        space=np.arange(ds_region.sizes['space'])
+    )
     return ds_region

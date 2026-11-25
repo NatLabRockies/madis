@@ -293,8 +293,7 @@ class MadisProcessor:
             Array of filtered file paths.
         """
         basefiles = [
-            os.path
-            .basename(file)
+            os.path.basename(file)
             .replace('.csv', '')
             .replace('.gz', '')
             .split('_')

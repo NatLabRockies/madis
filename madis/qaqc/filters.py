@@ -28,7 +28,7 @@ def _preflight(da):
     """
     assert isinstance(da, xr.DataArray)
     assert da.ndim == 2
-    assert da.dims == ("time", "space")
+    assert da.dims == ('time', 'space')
 
 
 def filter_linear_gaps(da, diff_threshold=1e-4, n_threshold=3):
@@ -65,21 +65,21 @@ def filter_linear_gaps(da, diff_threshold=1e-4, n_threshold=3):
 
     _preflight(da)
     bad_mask = da.copy().astype(bool)
-    bad_mask.name = "bad_linear_gaps"
+    bad_mask.name = 'bad_linear_gaps'
 
-    ti = pd.to_datetime(da["time"])
-    if ti.inferred_freq == "30min" and n_threshold == 3:
+    ti = pd.to_datetime(da['time'])
+    if ti.inferred_freq == '30min' and n_threshold == 3:
         msg = (
-            "CAUTION!! If MADIS data is interpolated from hourly to 30min "
-            "then n_threshold=3 will find linear blocks EVERYWHERE!"
+            'CAUTION!! If MADIS data is interpolated from hourly to 30min '
+            'then n_threshold=3 will find linear blocks EVERYWHERE!'
         )
         warn(msg)
         logger.warning(msg)
 
-    for idx in da["space"]:
+    for idx in da['space']:
         ida = da[:, idx]
 
-        diff2 = ida.diff("time").diff("time").values
+        diff2 = ida.diff('time').diff('time').values
         linear_mask = np.abs(diff2) < diff_threshold
         linear_mask = np.concatenate(([False], linear_mask, [False]))
 
@@ -90,7 +90,9 @@ def filter_linear_gaps(da, diff_threshold=1e-4, n_threshold=3):
 
         groups = (~extended_mask).cumsum()
         groups[~extended_mask] = 0  # Valid diff values
-        unique_groups, group_counts = np.unique(groups[groups > 0], return_counts=True)
+        unique_groups, group_counts = np.unique(
+            groups[groups > 0], return_counts=True
+        )
         size_map = dict(zip(unique_groups, group_counts))
         long_lines = np.vectorize(lambda g: size_map.get(g, 0) >= n_threshold)
         long_lines = long_lines(groups)
@@ -140,15 +142,15 @@ def filter_spikes(da, diff_threshold=15, ex_percentile=2):
 
     _preflight(da)
     bad_mask = da.copy().astype(bool)
-    bad_mask.name = "bad_spikes"
+    bad_mask.name = 'bad_spikes'
 
-    for idx in da["space"]:
+    for idx in da['space']:
         ida = da[:, idx]
         valid_mask = ~np.isnan(ida)
         valid_idx = np.where(valid_mask)[0]
         valid_values = ida[valid_mask].values
 
-        diff_nonan = np.abs(ida[~np.isnan(ida)].diff("time").values)
+        diff_nonan = np.abs(ida[~np.isnan(ida)].diff('time').values)
 
         spike_mask_compressed = np.zeros(len(valid_values), dtype=bool)
         spike_mask_compressed[1:-1] = (diff_nonan[:-1] > diff_threshold) | (
@@ -156,9 +158,9 @@ def filter_spikes(da, diff_threshold=15, ex_percentile=2):
         )
 
         top_p = 100 - ex_percentile
-        extreme_compressed = (valid_values > np.nanpercentile(valid_values, top_p)) | (
-            valid_values < np.nanpercentile(valid_values, ex_percentile)
-        )
+        extreme_compressed = (
+            valid_values > np.nanpercentile(valid_values, top_p)
+        ) | (valid_values < np.nanpercentile(valid_values, ex_percentile))
 
         bad_compressed = spike_mask_compressed & extreme_compressed
 
@@ -220,11 +222,11 @@ def filter_spike_groups(
 
     _preflight(da)
     bad_mask = da.copy().astype(bool)
-    bad_mask.name = "bad_spike_group"
+    bad_mask.name = 'bad_spike_group'
     bad_mask[...] = False
-    T = len(da["time"])
+    T = len(da['time'])
 
-    for idx in da["space"]:
+    for idx in da['space']:
         xv = da[:, idx].values
         if nan_spikes:
             xv = np.nan_to_num(xv, nan=0)
@@ -296,21 +298,21 @@ def filter_seasonal_anomalies(da, nstd=4):
 
     _preflight(da)
 
-    ti = pd.to_datetime(da["time"])
+    ti = pd.to_datetime(da['time'])
     df = pd.DataFrame(da.values, index=ti)
     seasonal = pd.DataFrame(index=df.index)
     rolling = df.rolling(120, center=True)
     bad_mask = da.copy().astype(bool)
-    bad_mask.name = "bad_seasonal_values"
+    bad_mask.name = 'bad_seasonal_values'
 
     for idx, window in enumerate(rolling):
         ind = df.index[idx]
-        seasonal.at[ind, "mean"] = np.nanmean(window.values)
-        seasonal.at[ind, "std"] = np.nanstd(window.values)
+        seasonal.at[ind, 'mean'] = np.nanmean(window.values)
+        seasonal.at[ind, 'std'] = np.nanstd(window.values)
 
     for idx in df.columns:
-        ub = seasonal["mean"] + nstd * seasonal["std"]
-        lb = seasonal["mean"] - nstd * seasonal["std"]
+        ub = seasonal['mean'] + nstd * seasonal['std']
+        lb = seasonal['mean'] - nstd * seasonal['std']
         mask = (df[idx] < lb) | (df[idx] > ub)
 
         bad_mask[:, idx] = mask
@@ -318,8 +320,8 @@ def filter_seasonal_anomalies(da, nstd=4):
     n_removed = bad_mask.sum().values
     n_total = bad_mask.size
     print(
-        f"Seasonal anomaly filter (nstd={nstd}): removed {n_removed} values"
-        f" out of {n_total} ({100 * n_removed / n_total:.2f}%)"
+        f'Seasonal anomaly filter (nstd={nstd}): removed {n_removed} values'
+        f' out of {n_total} ({100 * n_removed / n_total:.2f}%)'
     )
 
     return da, bad_mask
@@ -350,12 +352,12 @@ def filter_value_range(da, lower=None, upper=None):
     """
     if lower is None and upper is None:
         bad_mask = xr.zeros_like(da, dtype=bool)
-        bad_mask.name = "bad_value_range"
+        bad_mask.name = 'bad_value_range'
         return da, bad_mask
 
     _preflight(da)
     bad_mask = da.copy().astype(bool)
-    bad_mask.name = "bad_value_range"
+    bad_mask.name = 'bad_value_range'
     bad_mask[...] = False
 
     if lower is not None:
@@ -392,15 +394,15 @@ def filter_constant(da, value=None):
 
     _preflight(da)
     bad_mask = da.copy().astype(bool)
-    bad_mask.name = "bad_constant"
+    bad_mask.name = 'bad_constant'
     bad_mask[...] = False
 
     if value is None:
-        vmin = da.min(dim="time", skipna=True)
-        vmax = da.max(dim="time", skipna=True)
+        vmin = da.min(dim='time', skipna=True)
+        vmax = da.max(dim='time', skipna=True)
         constant = vmin == vmax
     else:
-        constant = (da == value).all("time")
+        constant = (da == value).all('time')
 
     da[:, constant] = np.nan
     bad_mask[:, constant] = True
@@ -472,35 +474,43 @@ def filter_percentile(
     _preflight(da)
 
     if not 0 <= percentile <= 100:
-        raise ValueError(f"percentile must be between 0 and 100, got {percentile}")
-    if direction not in ("greater", "less"):
-        raise ValueError(f"direction must be 'greater' or 'less', got {direction}")
+        raise ValueError(
+            f'percentile must be between 0 and 100, got {percentile}'
+        )
+    if direction not in ('greater', 'less'):
+        raise ValueError(
+            f"direction must be 'greater' or 'less', got {direction}"
+        )
 
-    percentile_per_station = da.quantile(percentile / 100.0, dim="time", skipna=True)
+    percentile_per_station = da.quantile(
+        percentile / 100.0, dim='time', skipna=True
+    )
 
     if threshold is not None:
-        mode_msg = "fixed"
-    elif method == "mean":
+        mode_msg = 'fixed'
+    elif method == 'mean':
         mean_p = percentile_per_station.mean().values
         std_p = float(percentile_per_station.std(skipna=True).values)
         threshold = (
-            mean_p + nstd * std_p if direction == "greater" else mean_p - nstd * std_p
+            mean_p + nstd * std_p
+            if direction == 'greater'
+            else mean_p - nstd * std_p
         )
         mode_msg = (
-            f"network-based (mean={mean_p:.2f}," f" std={std_p:.2f}, nstd={nstd})"
+            f'network-based (mean={mean_p:.2f}, std={std_p:.2f}, nstd={nstd})'
         )
-    elif method == "median":
+    elif method == 'median':
         median_p = percentile_per_station.median().values
         mad_p = np.nanmedian(np.abs(percentile_per_station.values - median_p))
         scaled_mad_p = 1.4826 * mad_p
         threshold = (
             median_p + nstd * scaled_mad_p
-            if direction == "greater"
+            if direction == 'greater'
             else median_p - nstd * scaled_mad_p
         )
         mode_msg = (
-            f"network-based (median={median_p:.2f},"
-            f"scaled_mad={scaled_mad_p:.2f}, nstd={nstd})"
+            f'network-based (median={median_p:.2f},'
+            f'scaled_mad={scaled_mad_p:.2f}, nstd={nstd})'
         )
     else:
         raise ValueError(
@@ -508,21 +518,21 @@ def filter_percentile(
             f"is not provided, got '{method}'"
         )
 
-    if direction == "greater":
+    if direction == 'greater':
         flagged_stations = percentile_per_station > threshold
     else:
         flagged_stations = percentile_per_station < threshold
 
     bad_mask = da.copy().astype(bool)
-    bad_mask.name = f"bad_high_p{int(percentile)}_stations"
+    bad_mask.name = f'bad_high_p{int(percentile)}_stations'
     bad_mask[...] = False
     bad_mask[:, flagged_stations] = True
 
     da[:, flagged_stations] = np.nan
 
     msg = (
-        f"P{int(percentile)} filter ({mode_msg}): threshold={threshold:.2f}, "
-        f"flagged {flagged_stations.sum().values} stations"
+        f'P{int(percentile)} filter ({mode_msg}): threshold={threshold:.2f}, '
+        f'flagged {flagged_stations.sum().values} stations'
     )
     logger.info(msg)
     print(msg)
@@ -530,7 +540,7 @@ def filter_percentile(
     return da, bad_mask
 
 
-def filter_mean(da, threshold, direction="greater"):
+def filter_mean(da, threshold, direction='greater'):
     """Filter out an ENTIRE stations where the mean of a variable across time
      is greater than a chosen threshold. This is designed to be applied to the
      error between MADIS observations and a reference dataset (e.g. HRRR f02)
@@ -557,18 +567,20 @@ def filter_mean(da, threshold, direction="greater"):
     """
 
     _preflight(da)
-    if direction not in ("greater", "less"):
-        raise ValueError(f"direction must be 'greater' or 'less', got {direction}")
+    if direction not in ('greater', 'less'):
+        raise ValueError(
+            f"direction must be 'greater' or 'less', got {direction}"
+        )
 
-    mean_per_station = da.mean(dim="time", skipna=True)
+    mean_per_station = da.mean(dim='time', skipna=True)
     flagged = (
         mean_per_station > threshold
-        if direction == "greater"
+        if direction == 'greater'
         else mean_per_station < threshold
     )
 
     bad_mask = xr.zeros_like(da, dtype=bool)
-    bad_mask.name = "bad_mean_stations"
+    bad_mask.name = 'bad_mean_stations'
     bad_mask[:, flagged] = True
     da[:, flagged] = np.nan
 
@@ -600,7 +612,7 @@ def filter_error(da, threshold):
     _preflight(da)
     bad_mask = da.copy().astype(bool)
     bad_mask[...] = False
-    bad_mask.name = "bad_error"
+    bad_mask.name = 'bad_error'
     bad_mask = abs(da) > threshold
     da = da.where(~bad_mask)
     return da, bad_mask
@@ -644,18 +656,20 @@ def filter_completeness(da, completeness=80, window=24, station_frac=None):
     _preflight(da)
 
     if not (0 <= completeness <= 100):
-        raise ValueError("completeness must be between 0 and 100")
+        raise ValueError('completeness must be between 0 and 100')
 
     bad_mask = da.copy().astype(bool)
-    bad_mask.name = "bad_completeness"
+    bad_mask.name = 'bad_completeness'
     bad_mask[...] = False
 
     min_non_na = completeness / 100 * window
 
-    for idx in da["space"]:
+    for idx in da['space']:
         ida = da[:, idx]
         rolling_non_na = (
-            ida.notnull().rolling(time=window, center=True, min_periods=1).sum()
+            ida.notnull()
+            .rolling(time=window, center=True, min_periods=1)
+            .sum()
         )
         ibad_mask = (rolling_non_na < min_non_na).values
         ida[ibad_mask] = np.nan
@@ -663,14 +677,14 @@ def filter_completeness(da, completeness=80, window=24, station_frac=None):
         bad_mask[:, idx] = ibad_mask
 
     if station_frac is not None:
-        frac_flagged = bad_mask.mean(dim="time")
+        frac_flagged = bad_mask.mean(dim='time')
         bad_stations = (frac_flagged > station_frac).values  # .values here
 
         bad_mask[:, bad_stations] = True
         n_flagged = int(bad_stations.sum())
         print(
-            f"Station completeness filter (station_frac={station_frac}): "
-            f"flagged {n_flagged} stations entirely"
+            f'Station completeness filter (station_frac={station_frac}): '
+            f'flagged {n_flagged} stations entirely'
         )
 
     return da, bad_mask
@@ -755,7 +769,7 @@ def _process_station_changepoint(
         algo = rpt.Pelt(model=model, jump=jump, min_size=min_size).fit(signal)
         result = algo.predict(pen=pen)
     except Exception as e:
-        logger.warning(f"Ruptures failed for station {idx}: {e}")
+        logger.warning(f'Ruptures failed for station {idx}: {e}')
         return skipped
 
     # Evaluate each segment
@@ -767,8 +781,8 @@ def _process_station_changepoint(
         segment_values = valid_values[start:end]
         segment_times = valid_times[start:end]
         seg_percentile = np.percentile(segment_values, percentile)
-        if (direction == "greater" and seg_percentile > threshold) or (
-            direction == "less" and seg_percentile < threshold
+        if (direction == 'greater' and seg_percentile > threshold) or (
+            direction == 'less' and seg_percentile < threshold
         ):
             bad_times.extend(segment_times)
             n_obs_flagged += len(segment_times)
@@ -782,9 +796,9 @@ def filter_changepoint(
     percentile=10,
     threshold=None,
     nstd=None,
-    direction="greater",
+    direction='greater',
     pen=250,
-    model="l1",
+    model='l1',
     jump=20,
     min_size=48,
 ):
@@ -841,35 +855,41 @@ def filter_changepoint(
     da = da.compute()
     _preflight(da)
     if not 0 <= percentile <= 100:
-        raise ValueError(f"percentile must be between 0 and 100, got {percentile}")
-    if direction not in ("greater", "less"):
-        raise ValueError(f"direction must be 'greater' or 'less', got {direction}")
+        raise ValueError(
+            f'percentile must be between 0 and 100, got {percentile}'
+        )
+    if direction not in ('greater', 'less'):
+        raise ValueError(
+            f"direction must be 'greater' or 'less', got {direction}"
+        )
     if threshold is None and nstd is None:
-        raise ValueError("Must provide either threshold or nstd")
+        raise ValueError('Must provide either threshold or nstd')
     bad_mask = da.copy().astype(bool)
-    bad_mask.name = f"bad_changepoint_p{int(percentile)}"
+    bad_mask.name = f'bad_changepoint_p{int(percentile)}'
     bad_mask[...] = False
 
     if threshold is None:
         percentile_per_station = da.quantile(
-            percentile / 100.0, dim="time", skipna=True
+            percentile / 100.0, dim='time', skipna=True
         )
         mean_p = float(percentile_per_station.mean().values)
         std_p = float(percentile_per_station.std().values)
         threshold = (
-            mean_p + nstd * std_p if direction == "greater" else mean_p - nstd * std_p
+            mean_p + nstd * std_p
+            if direction == 'greater'
+            else mean_p - nstd * std_p
         )
         mode_msg = (
-            f"network-based (mean={mean_p:.2f}, " f"std={std_p:.2f}, nstd={nstd})"
+            f'network-based (mean={mean_p:.2f}, std={std_p:.2f}, nstd={nstd})'
         )
     else:
-        mode_msg = "fixed"
+        mode_msg = 'fixed'
     n_stations_flagged = 0
     n_obs_flagged = 0
     n_stations_skipped = 0
     da_values = da.values
-    time_values = da["time"].values
-    space_values = da["space"].values
+    time_values = da['time'].values
+    space_values = da['space'].values
 
     for i, idx in enumerate(space_values):
         idx_val, bad_times, n_obs, skip_reason = _process_station_changepoint(
@@ -895,11 +915,11 @@ def filter_changepoint(
     # Apply mask to data
     da = da.where(~bad_mask, np.nan)
     msg = (
-        f"Change point filter (P{int(percentile)}, {mode_msg}): "
-        f"threshold={threshold:.2f}, pen={pen}, jump={jump},"
-        f"min_size={min_size},"
-        f"flagged {n_stations_flagged} stations ({n_obs_flagged} obs), "
-        f"skipped {n_stations_skipped} stations"
+        f'Change point filter (P{int(percentile)}, {mode_msg}): '
+        f'threshold={threshold:.2f}, pen={pen}, jump={jump},'
+        f'min_size={min_size},'
+        f'flagged {n_stations_flagged} stations ({n_obs_flagged} obs), '
+        f'skipped {n_stations_skipped} stations'
     )
     logger.info(msg)
     print(msg)
@@ -948,9 +968,9 @@ def filter_run_on_other_da(
 
     _, mask = base_filter(run_on_da.copy(), **base_filter_kwargs)
 
-    if apply_to in ("da", "both"):
+    if apply_to in ('da', 'both'):
         da = da.where(~mask, np.nan)
-    if apply_to in ("run_on_da", "both"):
+    if apply_to in ('run_on_da', 'both'):
         run_on_da[...] = run_on_da.where(~mask, np.nan)
 
     return da, mask

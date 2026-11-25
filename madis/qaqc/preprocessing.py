@@ -6,6 +6,7 @@ import pandas as pd
 from collections import defaultdict
 from scipy.spatial import cKDTree
 
+
 def calc_windspeed(
     wind_v: np.ndarray | xr.DataArray,
     wind_u: np.ndarray | xr.DataArray,
@@ -25,7 +26,7 @@ def calc_windspeed(
     : np.ndarray | xr.DataArray
         Wind speed (m/s)
     """
-    assert wind_v.shape == wind_u.shape, "arguments have mismatched shape"
+    assert wind_v.shape == wind_u.shape, 'arguments have mismatched shape'
     return np.hypot(wind_u, wind_v)
 
 
@@ -48,7 +49,7 @@ def calc_winddirection(
     deg_north: np.ndarray | xr.DataArray
         Wind direction in clockwise degrees from north (0 through 360)
     """
-    assert wind_v.shape == wind_u.shape, "arguments have mismatched shape"
+    assert wind_v.shape == wind_u.shape, 'arguments have mismatched shape'
     deg_north = np.degrees(np.arctan2(-wind_u, -wind_v)) % 360
     return deg_north
 
@@ -75,8 +76,8 @@ def mask_stations(
     xr.Dataset
         Dataset filtered to stations within the bounds.
     """
-    lat_obs = ds["latitude"].values
-    lon_obs = ds["longitude"].values
+    lat_obs = ds['latitude'].values
+    lon_obs = ds['longitude'].values
     mask = (
         (lat_obs >= lat_bounds[0])
         & (lat_obs <= lat_bounds[1])
@@ -119,27 +120,27 @@ def read_madis(
         Dataset with unique stations, all variables.
 
     """
-    file_paths = sorted(file_paths, key=lambda p: (0 if "metar" in p else 1))
+    file_paths = sorted(file_paths, key=lambda p: (0 if 'metar' in p else 1))
     seen_vars = defaultdict(list)
 
     for path in file_paths:
         ds = xr.open_dataset(path, chunks={})
-        ds["time"] = pd.to_datetime(ds["time"])
+        ds['time'] = pd.to_datetime(ds['time'])
         if lat_bounds is not None and lon_bounds is not None:
             ds = mask_stations(ds, lat_bounds, lon_bounds)
-        ds = ds.sortby("time")
-        ds = ds.set_index(space=("latitude", "longitude"))
+        ds = ds.sortby('time')
+        ds = ds.set_index(space=('latitude', 'longitude'))
         var = list(ds.data_vars)[0]
         seen_vars[var].append(ds)
 
     var_datasets = []
     for var, dss in seen_vars.items():
-        concatted = xr.concat(dss, dim="space")
-        index = concatted.get_index("space")
-        mask = ~index.duplicated(keep="first")
+        concatted = xr.concat(dss, dim='space')
+        index = concatted.get_index('space')
+        mask = ~index.duplicated(keep='first')
         var_datasets.append(concatted.isel(space=mask))
 
-    return xr.merge(var_datasets, compat="override", join="outer")
+    return xr.merge(var_datasets, compat='override', join='outer')
 
 
 def subset_grid_to_point_xy(
@@ -173,32 +174,32 @@ def subset_grid_to_point_xy(
     """
     point_ds = point_ds.where(point_ds.time.isin(ds.time), drop=True)
 
-    grid_lat = ds["latitude"].values
-    grid_lon = ds["longitude"].values
+    grid_lat = ds['latitude'].values
+    grid_lon = ds['longitude'].values
 
     grid_points = np.column_stack([grid_lat.ravel(), grid_lon.ravel()])
     tree = cKDTree(grid_points)
 
     obs_points = np.column_stack(
         [
-            point_ds["latitude"].values,
-            point_ds["longitude"].values,
+            point_ds['latitude'].values,
+            point_ds['longitude'].values,
         ]
     )
     _, flat_indices = tree.query(obs_points)
 
     nearest_y, nearest_x = np.unravel_index(flat_indices, grid_lat.shape)
 
-    nearest_y = xr.DataArray(nearest_y, dims="space")
-    nearest_x = xr.DataArray(nearest_x, dims="space")
+    nearest_y = xr.DataArray(nearest_y, dims='space')
+    nearest_x = xr.DataArray(nearest_x, dims='space')
 
     grid_subset = ds.isel(y=nearest_y, x=nearest_x)
 
     # lat lon become the true station coordinates
     grid_subset = grid_subset.assign_coords(
-        space=np.arange(point_ds.sizes["space"]),
-        latitude=("space", point_ds["latitude"].values),
-        longitude=("space", point_ds["longitude"].values),
+        space=np.arange(point_ds.sizes['space']),
+        latitude=('space', point_ds['latitude'].values),
+        longitude=('space', point_ds['longitude'].values),
     )
 
     return grid_subset
@@ -260,11 +261,13 @@ def forecast_obs_merge(
 
     """
     # Find common times and subset
-    common_times = np.intersect1d(ds1[ds1_timevar].values, ds2[ds2_timevar].values)
+    common_times = np.intersect1d(
+        ds1[ds1_timevar].values, ds2[ds2_timevar].values
+    )
 
     if len(common_times) == 0:
         raise ValueError(
-            f"No common times found between {ds1_timevar} and {ds2_timevar}"
+            f'No common times found between {ds1_timevar} and {ds2_timevar}'
         )
 
     ds1_subset = ds1.isel(time=ds1[ds1_timevar].isin(common_times).values)
@@ -281,23 +284,25 @@ def forecast_obs_merge(
     # Build merged dataset, applying prefixes to both ds1 and ds2 vars
     merged = xr.Dataset(
         coords={
-            "time": ds1_subset["time"],
-            "space": ds1_subset["space"],
+            'time': ds1_subset['time'],
+            'space': ds1_subset['space'],
             **{
-                k: v for k, v in ds1_subset.coords.items() if k not in ["time", "space"]
+                k: v
+                for k, v in ds1_subset.coords.items()
+                if k not in ['time', 'space']
             },
         }
     )
 
     for var in ds1_subset.data_vars:
-        name = f"{ds1_prefix}_{var}" if ds1_prefix else var
+        name = f'{ds1_prefix}_{var}' if ds1_prefix else var
         merged[name] = ds1_subset[var]
 
     for var in ds2_subset.data_vars:
-        name = f"{ds2_prefix}_{var}" if ds2_prefix else var
+        name = f'{ds2_prefix}_{var}' if ds2_prefix else var
         merged[name] = ds2_subset[var]
 
-    merged = merged.transpose("time", "space")
+    merged = merged.transpose('time', 'space')
     merged = merged.copy()
 
     return merged
@@ -336,9 +341,9 @@ def add_abs_diff(
     if ds[var1].dims != ds[var2].dims:
         raise ValueError(
             f"'{var1}' and '{var2}' have mismatched dimensions: "
-            f"{ds[var1].dims} vs {ds[var2].dims}"
+            f'{ds[var1].dims} vs {ds[var2].dims}'
         )
 
-    var_name = var_name if var_name else f"abs_diff_{var1}"
+    var_name = var_name if var_name else f'abs_diff_{var1}'
     ds[var_name] = np.abs(ds[var2] - ds[var1])
     return ds

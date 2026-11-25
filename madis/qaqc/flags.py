@@ -9,24 +9,24 @@ QC_FLAG_DTYPE = np.uint16
 """Integer type used to store QC flags."""
 QC_FLAG_NBITS = np.iinfo(QC_FLAG_DTYPE).bits
 """Number of bits in QC_FLAG_DTYPE."""
-QC_FLAG_SUFFIX = "_qc_flag"
+QC_FLAG_SUFFIX = '_qc_flag'
 """Suffix for QC flag variable names."""
 
 QC_FLAG_BITS = {
-    "missing_raw": 0,
-    "filter_completeness_initial": 1,
-    "filter_completeness_final": 2,
-    "filter_spikes": 3,
-    "filter_spike_groups": 4,
-    "filter_value_range": 5,
-    "filter_linear_gaps": 6,
-    "filter_constant": 7,
-    "filter_percentile": 8,
-    "filter_changepoint": 9,
-    "filter_error": 10,
-    "filter_mean": 11,
-    "filter_seasonal_anomalies": 12,
-    "mask_dependencies": 13,
+    'missing_raw': 0,
+    'filter_completeness_initial': 1,
+    'filter_completeness_final': 2,
+    'filter_spikes': 3,
+    'filter_spike_groups': 4,
+    'filter_value_range': 5,
+    'filter_linear_gaps': 6,
+    'filter_constant': 7,
+    'filter_percentile': 8,
+    'filter_changepoint': 9,
+    'filter_error': 10,
+    'filter_mean': 11,
+    'filter_seasonal_anomalies': 12,
+    'mask_dependencies': 13,
 }
 """Mapping of QC flag names to bit positions in the QC flag variable."""
 
@@ -47,7 +47,7 @@ def flag_var_name(var_name):
     str
         QC flag variable name, e.g. "windspeed_10m_qc_flag".
     """
-    return f"{var_name}{QC_FLAG_SUFFIX}"
+    return f'{var_name}{QC_FLAG_SUFFIX}'
 
 
 def flag_key(fun, kwargs, stage):
@@ -68,12 +68,12 @@ def flag_key(fun, kwargs, stage):
         QC flag name for the filter result.
     """
     if fun is filter_run_on_other_da:
-        return kwargs["base_filter"].__name__
+        return kwargs['base_filter'].__name__
     if fun is filter_completeness:
         return (
-            "filter_completeness_initial"
+            'filter_completeness_initial'
             if stage == 0
-            else "filter_completeness_final"
+            else 'filter_completeness_final'
         )
     return fun.__name__
 
@@ -152,7 +152,9 @@ def encode_flags(filter_masks, template):
         for mask in masks:
             flag[_mask_values(mask, template)] |= bit
     name = flag_var_name(template.name) if template.name else None
-    out = xr.DataArray(flag, dims=template.dims, coords=template.coords, name=name)
+    out = xr.DataArray(
+        flag, dims=template.dims, coords=template.coords, name=name
+    )
     out.attrs.update(cf_flag_attrs())
     return out
 
@@ -189,12 +191,12 @@ def cf_flag_attrs():
     """
     names = sorted(QC_FLAG_BITS, key=QC_FLAG_BITS.get)
     return {
-        "long_name": "QC flag bitmask",
-        "flag_masks": np.array(
+        'long_name': 'QC flag bitmask',
+        'flag_masks': np.array(
             [1 << QC_FLAG_BITS[n] for n in names],
             dtype=QC_FLAG_DTYPE,
         ),
-        "flag_meanings": " ".join(names),
+        'flag_meanings': ' '.join(names),
     }
 
 
@@ -217,7 +219,7 @@ def build_flag(raw, filter_masks, parent_mask=None):
         uint16 flag array named ``<var>_qc_flag``.
     """
     masks = dict(filter_masks)
-    masks["missing_raw"] = [raw.isnull()]
+    masks['missing_raw'] = [raw.isnull()]
     if parent_mask is not None:
-        masks["mask_dependencies"] = [parent_mask]
+        masks['mask_dependencies'] = [parent_mask]
     return encode_flags(masks, raw)
