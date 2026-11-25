@@ -774,7 +774,6 @@ def _process_station_changepoint(
 
     # Evaluate each segment
     segment_boundaries = [0] + result
-    station_flagged = False
     bad_times = []
     n_obs_flagged = 0
     for start, end in zip(segment_boundaries[:-1], segment_boundaries[1:]):
@@ -786,9 +785,8 @@ def _process_station_changepoint(
         ):
             bad_times.extend(segment_times)
             n_obs_flagged += len(segment_times)
-            station_flagged = True
 
-    return idx, bad_times, n_obs_flagged, station_flagged
+    return idx, bad_times, n_obs_flagged, False
 
 
 def filter_changepoint(
